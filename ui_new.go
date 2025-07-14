@@ -54,6 +54,8 @@ func InitialModelV2(conn net.Conn, api *GameAPI) ModelV2 {
 		parser:       parser,
 		vitalsParser: NewVitalsParser(),
 		gameState:    gameState,
+		width:        80,  // Default width
+		height:       24,  // Default height
 	}
 }
 
@@ -284,15 +286,17 @@ func (m ModelV2) buildStatusBar() string {
 		components = append(components, mana)
 	}
 	
-	// Stamina/Fatigue - always show
+	// Stamina/Fatigue - always show (inverted - 100% = fully rested)
+	// Display as "energy used" instead of "energy remaining"
+	fatigueUsed := 100 - gs.Stamina
 	staminaColor := "214" // orange
-	if gs.Stamina < 33 {
-		staminaColor = "196" // red
-	} else if gs.Stamina < 66 {
-		staminaColor = "226" // yellow
+	if fatigueUsed > 66 {
+		staminaColor = "196" // red (very tired)
+	} else if fatigueUsed > 33 {
+		staminaColor = "226" // yellow (somewhat tired)
 	}
 	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(
-		fmt.Sprintf("F:%d%%", gs.Stamina))
+		fmt.Sprintf("F:%d%%", fatigueUsed))
 	components = append(components, stamina)
 	
 	// Concentration - always show
@@ -335,8 +339,16 @@ func (m ModelV2) buildStatusBar() string {
 	// Truncate status if too long for screen width
 	// Account for padding in status style (2 chars)
 	maxLen := m.width - 2
-	if len(status) > maxLen && maxLen > 20 {
-		status = status[:maxLen-3] + "..."
+	if maxLen > 0 && len(status) > maxLen {
+		// Try to intelligently truncate by removing less important info first
+		if gs.Roundtime == 0 && len(status) > maxLen {
+			// Remove RT section if no roundtime
+			status = strings.Join(components, " | ")
+		}
+		// If still too long, truncate with ellipsis
+		if len(status) > maxLen {
+			status = status[:maxLen-3] + "..."
+		}
 	}
 	
 	return status
