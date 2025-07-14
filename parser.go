@@ -10,23 +10,23 @@ import (
 
 // GameState holds parsed game state
 type GameState struct {
-	Health        int
-	MaxHealth     int
-	Mana          int
-	MaxMana       int
-	Stamina       int
-	MaxStamina    int
-	Concentration int
+	Health           int
+	MaxHealth        int
+	Mana             int
+	MaxMana          int
+	Stamina          int
+	MaxStamina       int
+	Concentration    int
 	MaxConcentration int
-	Spirit        int
-	MaxSpirit     int
-	Stance        int
-	Roundtime     int
-	CastRT        int
-	Room          RoomInfo
-	RightHand     string
-	LeftHand      string
-	Spell         string
+	Spirit           int
+	MaxSpirit        int
+	Stance           int
+	Roundtime        int
+	CastRT           int
+	Room             RoomInfo
+	RightHand        string
+	LeftHand         string
+	Spell            string
 }
 
 // RoomInfo holds current room information
@@ -63,15 +63,15 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	text := string(data)
 	p.textBuffer.Reset()
-	
+
 	// Parse health bars from dialogData
 	if strings.Contains(text, "progressBar") {
 		p.parseProgressBars(text)
 	}
-	
+
 	// Basic XML stripping for display
 	result := ""
 	inTag := false
@@ -84,7 +84,7 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 			result += string(ch)
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -111,7 +111,7 @@ func (p *XMLParser) parseProgressBars(text string) {
 		}
 		return -1 // Not found
 	}
-	
+
 	// Parse all vitals - try both with and without "2" suffix
 	if val := extractProgressBar(text, "health"); val >= 0 {
 		p.state.Health = val
@@ -126,7 +126,7 @@ func (p *XMLParser) parseProgressBars(text string) {
 			fmt.Printf("[DEBUG] Health2: %d%%\n", val)
 		}
 	}
-	
+
 	if val := extractProgressBar(text, "mana"); val >= 0 {
 		p.state.Mana = val
 		p.state.MaxMana = 100
@@ -140,7 +140,7 @@ func (p *XMLParser) parseProgressBars(text string) {
 			fmt.Printf("[DEBUG] Mana2: %d%%\n", val)
 		}
 	}
-	
+
 	if val := extractProgressBar(text, "stamina"); val >= 0 {
 		p.state.Stamina = val
 		p.state.MaxStamina = 100
@@ -154,7 +154,7 @@ func (p *XMLParser) parseProgressBars(text string) {
 			fmt.Printf("[DEBUG] Fatigue: %d%%\n", val)
 		}
 	}
-	
+
 	// Parse additional vitals that Outlander tracks
 	if val := extractProgressBar(text, "concentration"); val >= 0 {
 		p.state.Concentration = val
@@ -163,7 +163,7 @@ func (p *XMLParser) parseProgressBars(text string) {
 			fmt.Printf("[DEBUG] Concentration: %d%%\n", val)
 		}
 	}
-	
+
 	if val := extractProgressBar(text, "spirit"); val >= 0 {
 		p.state.Spirit = val
 		p.state.MaxSpirit = 100
@@ -176,7 +176,7 @@ func (p *XMLParser) parseProgressBars(text string) {
 func (p *XMLParser) parsePromptTag(tag string) {
 	// Extract attributes from prompt tag
 	attrs := make(map[string]string)
-	
+
 	// Simple attribute parsing
 	parts := strings.Split(tag, " ")
 	for _, part := range parts[1:] {
@@ -189,7 +189,7 @@ func (p *XMLParser) parsePromptTag(tag string) {
 			}
 		}
 	}
-	
+
 	// Update game state from attributes
 	if v, ok := attrs["health"]; ok {
 		fmt.Sscanf(v, "%d", &p.state.Health)

@@ -22,22 +22,15 @@ func (m *DrCharm) Build(
 	var builds []*dagger.File
 
 	for _, platform := range platforms {
-		parts := []string{}
-		for i, part := range strings.Split(platform, "/") {
-			if i == 0 {
-				parts = append(parts, "GOOS="+part)
-			} else {
-				parts = append(parts, "GOARCH="+part)
-			}
-		}
-
 		binary := dag.Container().
 			From("golang:1.23-alpine").
 			WithMountedDirectory("/src", source).
 			WithWorkdir("/src").
 			WithEnvVariable("CGO_ENABLED", "0").
+			WithEnvVariable("GOOS", strings.Split(platform, "/")[0]).
+			WithEnvVariable("GOARCH", strings.Split(platform, "/")[1]).
 			WithExec([]string{"go", "mod", "download"}).
-			WithExec(append(parts, "go", "build", "-o", fmt.Sprintf("dr-charm-%s", strings.ReplaceAll(platform, "/", "-")), ".")).
+			WithExec([]string{"go", "build", "-o", fmt.Sprintf("dr-charm-%s", strings.ReplaceAll(platform, "/", "-")), "."}).
 			File(fmt.Sprintf("/src/dr-charm-%s", strings.ReplaceAll(platform, "/", "-")))
 
 		builds = append(builds, binary)

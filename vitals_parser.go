@@ -38,7 +38,7 @@ func (v *VitalsParser) ParseFromText(text string, state *GameState) {
 			state.MaxHealth = max
 		}
 	}
-	
+
 	// Try to find mana
 	if matches := v.manaPattern.FindStringSubmatch(text); len(matches) == 3 {
 		if current, err := strconv.Atoi(matches[1]); err == nil {
@@ -48,7 +48,7 @@ func (v *VitalsParser) ParseFromText(text string, state *GameState) {
 			state.MaxMana = max
 		}
 	}
-	
+
 	// Try to find stamina
 	if matches := v.staminaPattern.FindStringSubmatch(text); len(matches) == 3 {
 		if current, err := strconv.Atoi(matches[1]); err == nil {
@@ -66,24 +66,24 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	if !strings.Contains(xmlData, "<prompt") {
 		return false
 	}
-	
+
 	// Extract the prompt tag
 	start := strings.Index(xmlData, "<prompt")
 	if start < 0 {
 		return false
 	}
-	
+
 	end := strings.Index(xmlData[start:], ">")
 	if end < 0 {
 		return false
 	}
-	
+
 	promptTag := xmlData[start : start+end+1]
-	
+
 	// Parse attributes - DragonRealms might use different names
 	// Try common variations
 	attrs := extractAttributes(promptTag)
-	
+
 	// Health variations
 	if val, ok := attrs["health"]; ok {
 		state.Health = parseInt(val)
@@ -92,7 +92,7 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	} else if val, ok := attrs["hitpoints"]; ok {
 		state.Health = parseInt(val)
 	}
-	
+
 	if val, ok := attrs["maxhealth"]; ok {
 		state.MaxHealth = parseInt(val)
 	} else if val, ok := attrs["maxhp"]; ok {
@@ -100,7 +100,7 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	} else if val, ok := attrs["maxhitpoints"]; ok {
 		state.MaxHealth = parseInt(val)
 	}
-	
+
 	// Mana variations
 	if val, ok := attrs["mana"]; ok {
 		state.Mana = parseInt(val)
@@ -109,7 +109,7 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	} else if val, ok := attrs["manapoints"]; ok {
 		state.Mana = parseInt(val)
 	}
-	
+
 	if val, ok := attrs["maxmana"]; ok {
 		state.MaxMana = parseInt(val)
 	} else if val, ok := attrs["maxmp"]; ok {
@@ -117,7 +117,7 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	} else if val, ok := attrs["maxmanapoints"]; ok {
 		state.MaxMana = parseInt(val)
 	}
-	
+
 	// Stamina variations
 	if val, ok := attrs["stamina"]; ok {
 		state.Stamina = parseInt(val)
@@ -126,7 +126,7 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	} else if val, ok := attrs["endurance"]; ok {
 		state.Stamina = parseInt(val)
 	}
-	
+
 	if val, ok := attrs["maxstamina"]; ok {
 		state.MaxStamina = parseInt(val)
 	} else if val, ok := attrs["maxfatigue"]; ok {
@@ -134,42 +134,42 @@ func (v *VitalsParser) ParsePromptXML(xmlData string, state *GameState) bool {
 	} else if val, ok := attrs["maxendurance"]; ok {
 		state.MaxStamina = parseInt(val)
 	}
-	
+
 	// Stance
 	if val, ok := attrs["stance"]; ok {
 		state.Stance = parseInt(val)
 	} else if val, ok := attrs["position"]; ok {
 		state.Stance = parseInt(val)
 	}
-	
+
 	return true
 }
 
 // Helper to extract attributes from XML tag
 func extractAttributes(tag string) map[string]string {
 	attrs := make(map[string]string)
-	
+
 	// Remove tag brackets and name
 	tag = strings.TrimPrefix(tag, "<")
 	tag = strings.TrimSuffix(tag, ">")
 	tag = strings.TrimSuffix(tag, "/")
-	
+
 	// Skip tag name
 	parts := strings.Fields(tag)
 	if len(parts) <= 1 {
 		return attrs
 	}
-	
+
 	// Parse attributes
 	attrPattern := regexp.MustCompile(`(\w+)=["']([^"']+)["']`)
 	matches := attrPattern.FindAllStringSubmatch(tag, -1)
-	
+
 	for _, match := range matches {
 		if len(match) == 3 {
 			attrs[strings.ToLower(match[1])] = match[2]
 		}
 	}
-	
+
 	return attrs
 }
 

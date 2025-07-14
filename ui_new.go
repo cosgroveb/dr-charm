@@ -44,7 +44,7 @@ func InitialModelV2(conn net.Conn, api *GameAPI) ModelV2 {
 	gameState.Spirit = 100
 	gameState.MaxSpirit = 100
 	gameState.Stance = 3 // Standing
-	
+
 	return ModelV2{
 		conn:         conn,
 		api:          api,
@@ -54,8 +54,8 @@ func InitialModelV2(conn net.Conn, api *GameAPI) ModelV2 {
 		parser:       parser,
 		vitalsParser: NewVitalsParser(),
 		gameState:    gameState,
-		width:        80,  // Default width
-		height:       24,  // Default height
+		width:        80, // Default width
+		height:       24, // Default height
 	}
 }
 
@@ -72,7 +72,7 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			m.quitting = true
 			return m, tea.Quit
-			
+
 		case tea.KeyEnter:
 			if m.input != "" {
 				// Send command to game
@@ -94,7 +94,7 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.input = ""
 			}
-			
+
 		case tea.KeyUp:
 			// Navigate command history
 			if m.historyIndex > 0 {
@@ -103,7 +103,7 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.input = m.history[m.historyIndex]
 				}
 			}
-			
+
 		case tea.KeyDown:
 			// Navigate command history
 			if m.historyIndex < len(m.history)-1 {
@@ -113,15 +113,15 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.historyIndex = len(m.history)
 				m.input = ""
 			}
-			
+
 		case tea.KeyBackspace:
 			if len(m.input) > 0 {
 				m.input = m.input[:len(m.input)-1]
 			}
-			
+
 		case tea.KeySpace:
 			m.input += " "
-			
+
 		default:
 			if msg.Type == tea.KeyRunes {
 				m.input += string(msg.Runes)
@@ -178,7 +178,7 @@ func (m ModelV2) View() string {
 	if m.err != nil {
 		errorHeight = 2
 	}
-	
+
 	// Calculate output window height
 	totalFixedHeight := titleHeight + statusHeight + inputHeight + errorHeight + 2 // +2 for margins
 	outputHeight := m.height - totalFixedHeight
@@ -218,13 +218,13 @@ func (m ModelV2) View() string {
 
 	// Build output content
 	var output strings.Builder
-	
+
 	// Calculate visible lines (account for padding)
 	visibleLines := outputHeight - 2 // -2 for padding
 	if visibleLines < 1 {
 		visibleLines = 1
 	}
-	
+
 	// Get the lines to display
 	startIdx := 0
 	if len(m.output) > visibleLines {
@@ -257,14 +257,14 @@ func (m ModelV2) View() string {
 
 func (m ModelV2) buildStatusBar() string {
 	gs := m.gameState
-	
+
 	// Determine if we need compact mode based on terminal width
 	// Estimate ~50 chars for full display
 	compactMode := m.width < 60
-	
+
 	// Build status components
 	var components []string
-	
+
 	// Health - always show
 	healthColor := "196" // red
 	if gs.Health > 66 {
@@ -278,7 +278,7 @@ func (m ModelV2) buildStatusBar() string {
 	}
 	health := lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(healthStr)
 	components = append(components, health)
-	
+
 	// Mana - only show if player has mana
 	if gs.MaxMana > 0 && gs.Mana > 0 {
 		manaColor := "33" // blue
@@ -294,7 +294,7 @@ func (m ModelV2) buildStatusBar() string {
 		mana := lipgloss.NewStyle().Foreground(lipgloss.Color(manaColor)).Render(manaStr)
 		components = append(components, mana)
 	}
-	
+
 	// Stamina/Fatigue - always show (inverted - 100% = fully rested)
 	fatigueUsed := 100 - gs.Stamina
 	staminaColor := "214" // orange
@@ -309,7 +309,7 @@ func (m ModelV2) buildStatusBar() string {
 	}
 	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(staminaStr)
 	components = append(components, stamina)
-	
+
 	// In compact mode, skip concentration and spirit if really tight
 	if !compactMode || m.width > 45 {
 		// Concentration
@@ -325,7 +325,7 @@ func (m ModelV2) buildStatusBar() string {
 		}
 		conc := lipgloss.NewStyle().Foreground(lipgloss.Color(concColor)).Render(concStr)
 		components = append(components, conc)
-		
+
 		// Spirit
 		spiritColor := "135" // purple
 		if gs.Spirit < 33 {
@@ -340,7 +340,7 @@ func (m ModelV2) buildStatusBar() string {
 		spirit := lipgloss.NewStyle().Foreground(lipgloss.Color(spiritColor)).Render(spiritStr)
 		components = append(components, spirit)
 	}
-	
+
 	// Stance - abbreviate in compact mode
 	stanceStr := getStanceName(gs.Stance)
 	if compactMode && len(stanceStr) > 3 {
@@ -351,21 +351,21 @@ func (m ModelV2) buildStatusBar() string {
 		stance = stanceStr
 	}
 	components = append(components, stance)
-	
+
 	// Build status line
 	separator := " | "
 	if compactMode {
 		separator = " "
 	}
 	status := strings.Join(components, separator)
-	
+
 	// Add RT if present
 	if gs.Roundtime > 0 {
 		rt := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(
 			fmt.Sprintf("RT:%d", gs.Roundtime))
 		status += separator + rt
 	}
-	
+
 	return status
 }
 
@@ -404,7 +404,7 @@ func readGameOutputV2(conn net.Conn, parser *XMLParser, vitalsParser *VitalsPars
 
 		// Get current state
 		state := parser.GetState()
-		
+
 		// Try additional vitals parsing
 		vitalsParser.ParsePromptXML(rawData, state)
 		vitalsParser.ParseFromText(text, state)
