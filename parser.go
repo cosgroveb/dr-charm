@@ -63,13 +63,9 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 	text := string(data)
 	p.textBuffer.Reset()
 	
-	// Extract prompt vitals if present
-	if idx := strings.Index(text, "<prompt"); idx >= 0 {
-		promptEnd := strings.Index(text[idx:], ">")
-		if promptEnd > 0 {
-			promptTag := text[idx : idx+promptEnd+1]
-			p.parsePromptTag(promptTag)
-		}
+	// Parse health bars from dialogData
+	if strings.Contains(text, "progressBar") {
+		p.parseProgressBars(text)
 	}
 	
 	// Basic XML stripping for display
@@ -86,6 +82,90 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 	}
 	
 	return result, nil
+}
+
+func (p *XMLParser) parseProgressBars(text string) {
+	// Parse health bar
+	if idx := strings.Index(text, `<progressBar id="health`); idx >= 0 {
+		end := strings.Index(text[idx:], "/>")
+		if end > 0 {
+			healthBar := text[idx : idx+end+2]
+			// Extract value
+			if valueIdx := strings.Index(healthBar, `value="`); valueIdx >= 0 {
+				valueEnd := strings.Index(healthBar[valueIdx+7:], `"`)
+				if valueEnd > 0 {
+					value := healthBar[valueIdx+7 : valueIdx+7+valueEnd]
+					if val, err := fmt.Sscanf(value, "%d", &p.state.Health); err == nil && val == 1 {
+						p.state.MaxHealth = 100 // Percentage based
+						if p.debug {
+							fmt.Printf("[DEBUG] Health: %d%%\n", p.state.Health)
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Parse mana bar
+	if idx := strings.Index(text, `<progressBar id="mana`); idx >= 0 {
+		end := strings.Index(text[idx:], "/>")
+		if end > 0 {
+			manaBar := text[idx : idx+end+2]
+			// Extract value
+			if valueIdx := strings.Index(manaBar, `value="`); valueIdx >= 0 {
+				valueEnd := strings.Index(manaBar[valueIdx+7:], `"`)
+				if valueEnd > 0 {
+					value := manaBar[valueIdx+7 : valueIdx+7+valueEnd]
+					if val, err := fmt.Sscanf(value, "%d", &p.state.Mana); err == nil && val == 1 {
+						p.state.MaxMana = 100 // Percentage based
+						if p.debug {
+							fmt.Printf("[DEBUG] Mana: %d%%\n", p.state.Mana)
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Parse stamina/fatigue bar
+	if idx := strings.Index(text, `<progressBar id="stamina`); idx >= 0 {
+		end := strings.Index(text[idx:], "/>")
+		if end > 0 {
+			staminaBar := text[idx : idx+end+2]
+			// Extract value
+			if valueIdx := strings.Index(staminaBar, `value="`); valueIdx >= 0 {
+				valueEnd := strings.Index(staminaBar[valueIdx+7:], `"`)
+				if valueEnd > 0 {
+					value := staminaBar[valueIdx+7 : valueIdx+7+valueEnd]
+					if val, err := fmt.Sscanf(value, "%d", &p.state.Stamina); err == nil && val == 1 {
+						p.state.MaxStamina = 100 // Percentage based
+						if p.debug {
+							fmt.Printf("[DEBUG] Stamina: %d%%\n", p.state.Stamina)
+						}
+					}
+				}
+			}
+		}
+	} else if idx := strings.Index(text, `<progressBar id="fatigue`); idx >= 0 {
+		// Some versions use fatigue instead of stamina
+		end := strings.Index(text[idx:], "/>")
+		if end > 0 {
+			fatigueBar := text[idx : idx+end+2]
+			// Extract value
+			if valueIdx := strings.Index(fatigueBar, `value="`); valueIdx >= 0 {
+				valueEnd := strings.Index(fatigueBar[valueIdx+7:], `"`)
+				if valueEnd > 0 {
+					value := fatigueBar[valueIdx+7 : valueIdx+7+valueEnd]
+					if val, err := fmt.Sscanf(value, "%d", &p.state.Stamina); err == nil && val == 1 {
+						p.state.MaxStamina = 100 // Percentage based
+						if p.debug {
+							fmt.Printf("[DEBUG] Fatigue: %d%%\n", p.state.Stamina)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func (p *XMLParser) parsePromptTag(tag string) {

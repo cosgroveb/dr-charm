@@ -24,26 +24,38 @@ type ModelV2 struct {
 	width        int
 	height       int
 	parser       *XMLParser
+	vitalsParser *VitalsParser
 	gameState    *GameState
 }
 
 // InitialModelV2 creates the enhanced model
 func InitialModelV2(conn net.Conn, api *GameAPI) ModelV2 {
-	parser := NewXMLParser(false) // Set to true for debug
+	parser := NewXMLParser(false) // Disable debug
+	gameState := parser.GetState()
+	// Initialize with default values so we don't show 0/0
+	gameState.Health = 100
+	gameState.MaxHealth = 100
+	gameState.Mana = 0
+	gameState.MaxMana = 0
+	gameState.Stamina = 100
+	gameState.MaxStamina = 100
+	gameState.Stance = 3 // Standing
+	
 	return ModelV2{
-		conn:      conn,
-		api:       api,
-		output:    []string{"Connected to DragonRealms"},
-		input:     "",
-		history:   []string{},
-		parser:    parser,
-		gameState: parser.GetState(),
+		conn:         conn,
+		api:          api,
+		output:       []string{"Connected to DragonRealms"},
+		input:        "",
+		history:      []string{},
+		parser:       parser,
+		vitalsParser: NewVitalsParser(),
+		gameState:    gameState,
 	}
 }
 
 // Init initializes the model
 func (m ModelV2) Init() tea.Cmd {
-	return readGameOutputV2(m.conn, m.parser)
+	return readGameOutputV2(m.conn, m.parser, m.vitalsParser)
 }
 
 // Update handles messages
@@ -132,7 +144,7 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update game state
 		m.gameState = msg.state
 		// Continue reading
-		return m, readGameOutputV2(m.conn, m.parser)
+		return m, readGameOutputV2(m.conn, m.parser, m.vitalsParser)
 
 	case errMsg:
 		m.err = msg
@@ -241,15 +253,11 @@ func (m ModelV2) View() string {
 func (m ModelV2) buildStatusBar() string {
 	gs := m.gameState
 	
-	// Health bar
-	healthPct := 0
-	if gs.MaxHealth > 0 {
-		healthPct = gs.Health * 100 / gs.MaxHealth
-	}
+	// If we have percentage-based health (0-100), use that
 	healthColor := "196" // red
-	if healthPct > 66 {
+	if gs.Health > 66 {
 		healthColor = "46" // green
-	} else if healthPct > 33 {
+	} else if gs.Health > 33 {
 		healthColor = "226" // yellow
 	}
 	
@@ -257,12 +265,45 @@ func (m ModelV2) buildStatusBar() string {
 	stanceStr := getStanceName(gs.Stance)
 	
 	// Build status components
-	health := lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
-		fmt.Sprintf("H:%d/%d", gs.Health, gs.MaxHealth))
-	mana := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(
-		fmt.Sprintf("M:%d/%d", gs.Mana, gs.MaxMana))
-	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(
-		fmt.Sprintf("S:%d/%d", gs.Stamina, gs.MaxStamina))
+	var health, mana, stamina string
+	
+	// Show as percentages if max is 100
+	if gs.MaxHealth == 100 {
+		health = lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
+			fmt.Sprintf("H:%d%%", gs.Health))
+	} else {
+		health = lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
+			fmt.Sprintf("H:%d/%d", gs.Health, gs.MaxHealth))
+	}
+	
+	if gs.MaxMana == 100 {
+		manaColor := "33"
+		if gs.Mana < 33 {
+			manaColor = "196"
+		} else if gs.Mana < 66 {
+			manaColor = "226"
+		}
+		mana = lipgloss.NewStyle().Foreground(lipgloss.Color(manaColor)).Render(
+			fmt.Sprintf("M:%d%%", gs.Mana))
+	} else {
+		mana = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(
+			fmt.Sprintf("M:%d/%d", gs.Mana, gs.MaxMana))
+	}
+	
+	if gs.MaxStamina == 100 {
+		staminaColor := "214"
+		if gs.Stamina < 33 {
+			staminaColor = "196"
+		} else if gs.Stamina < 66 {
+			staminaColor = "226"
+		}
+		stamina = lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(
+			fmt.Sprintf("S:%d%%", gs.Stamina))
+	} else {
+		stamina = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(
+			fmt.Sprintf("S:%d/%d", gs.Stamina, gs.MaxStamina))
+	}
+	
 	stance := fmt.Sprintf("St:%s", stanceStr)
 	
 	// Build basic status
@@ -300,7 +341,7 @@ type gameOutputMsgV2 struct {
 }
 
 // readGameOutputV2 reads and parses game output
-func readGameOutputV2(conn net.Conn, parser *XMLParser) tea.Cmd {
+func readGameOutputV2(conn net.Conn, parser *XMLParser, vitalsParser *VitalsParser) tea.Cmd {
 	return func() tea.Msg {
 		buf := make([]byte, 4096)
 		n, err := conn.Read(buf)
@@ -308,20 +349,29 @@ func readGameOutputV2(conn net.Conn, parser *XMLParser) tea.Cmd {
 			return errMsg(err)
 		}
 
+		rawData := string(buf[:n])
+
 		// Parse XML and extract display text
-		reader := strings.NewReader(string(buf[:n]))
+		reader := strings.NewReader(rawData)
 		text, err := parser.ParseStream(reader)
 		if err != nil && err != io.EOF {
 			// Log parsing errors but don't fail
-			text = string(buf[:n]) // Fallback to raw text
+			text = rawData // Fallback to raw text
 		}
+
+		// Get current state
+		state := parser.GetState()
+		
+		// Try additional vitals parsing
+		vitalsParser.ParsePromptXML(rawData, state)
+		vitalsParser.ParseFromText(text, state)
 
 		// Decode HTML entities
 		text = html.UnescapeString(text)
 
 		return gameOutputMsgV2{
 			text:  text,
-			state: parser.GetState(),
+			state: state,
 		}
 	}
 }
