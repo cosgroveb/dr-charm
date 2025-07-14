@@ -197,8 +197,7 @@ func (m ModelV2) View() string {
 		Foreground(lipgloss.Color("240")).
 		Background(lipgloss.Color("235")).
 		Padding(0, 1).
-		Width(m.width).
-		MaxWidth(m.width)
+		Width(m.width)
 
 	outputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -259,6 +258,10 @@ func (m ModelV2) View() string {
 func (m ModelV2) buildStatusBar() string {
 	gs := m.gameState
 	
+	// Determine if we need compact mode based on terminal width
+	// Estimate ~50 chars for full display
+	compactMode := m.width < 60
+	
 	// Build status components
 	var components []string
 	
@@ -269,8 +272,11 @@ func (m ModelV2) buildStatusBar() string {
 	} else if gs.Health > 33 {
 		healthColor = "226" // yellow
 	}
-	health := lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
-		fmt.Sprintf("H:%d%%", gs.Health))
+	healthStr := fmt.Sprintf("H:%d%%", gs.Health)
+	if compactMode {
+		healthStr = fmt.Sprintf("H:%d", gs.Health)
+	}
+	health := lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(healthStr)
 	components = append(components, health)
 	
 	// Mana - only show if player has mana
@@ -281,13 +287,15 @@ func (m ModelV2) buildStatusBar() string {
 		} else if gs.Mana < 66 {
 			manaColor = "226" // yellow
 		}
-		mana := lipgloss.NewStyle().Foreground(lipgloss.Color(manaColor)).Render(
-			fmt.Sprintf("M:%d%%", gs.Mana))
+		manaStr := fmt.Sprintf("M:%d%%", gs.Mana)
+		if compactMode {
+			manaStr = fmt.Sprintf("M:%d", gs.Mana)
+		}
+		mana := lipgloss.NewStyle().Foreground(lipgloss.Color(manaColor)).Render(manaStr)
 		components = append(components, mana)
 	}
 	
 	// Stamina/Fatigue - always show (inverted - 100% = fully rested)
-	// Display as "energy used" instead of "energy remaining"
 	fatigueUsed := 100 - gs.Stamina
 	staminaColor := "214" // orange
 	if fatigueUsed > 66 {
@@ -295,60 +303,67 @@ func (m ModelV2) buildStatusBar() string {
 	} else if fatigueUsed > 33 {
 		staminaColor = "226" // yellow (somewhat tired)
 	}
-	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(
-		fmt.Sprintf("F:%d%%", fatigueUsed))
+	staminaStr := fmt.Sprintf("F:%d%%", fatigueUsed)
+	if compactMode {
+		staminaStr = fmt.Sprintf("F:%d", fatigueUsed)
+	}
+	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(staminaStr)
 	components = append(components, stamina)
 	
-	// Concentration - always show
-	concColor := "51" // cyan
-	if gs.Concentration < 33 {
-		concColor = "196" // red
-	} else if gs.Concentration < 66 {
-		concColor = "226" // yellow
+	// In compact mode, skip concentration and spirit if really tight
+	if !compactMode || m.width > 45 {
+		// Concentration
+		concColor := "51" // cyan
+		if gs.Concentration < 33 {
+			concColor = "196" // red
+		} else if gs.Concentration < 66 {
+			concColor = "226" // yellow
+		}
+		concStr := fmt.Sprintf("C:%d%%", gs.Concentration)
+		if compactMode {
+			concStr = fmt.Sprintf("C:%d", gs.Concentration)
+		}
+		conc := lipgloss.NewStyle().Foreground(lipgloss.Color(concColor)).Render(concStr)
+		components = append(components, conc)
+		
+		// Spirit
+		spiritColor := "135" // purple
+		if gs.Spirit < 33 {
+			spiritColor = "196" // red
+		} else if gs.Spirit < 66 {
+			spiritColor = "226" // yellow
+		}
+		spiritStr := fmt.Sprintf("Sp:%d%%", gs.Spirit)
+		if compactMode {
+			spiritStr = fmt.Sprintf("S:%d", gs.Spirit)
+		}
+		spirit := lipgloss.NewStyle().Foreground(lipgloss.Color(spiritColor)).Render(spiritStr)
+		components = append(components, spirit)
 	}
-	conc := lipgloss.NewStyle().Foreground(lipgloss.Color(concColor)).Render(
-		fmt.Sprintf("C:%d%%", gs.Concentration))
-	components = append(components, conc)
 	
-	// Spirit - always show
-	spiritColor := "135" // purple
-	if gs.Spirit < 33 {
-		spiritColor = "196" // red
-	} else if gs.Spirit < 66 {
-		spiritColor = "226" // yellow
-	}
-	spirit := lipgloss.NewStyle().Foreground(lipgloss.Color(spiritColor)).Render(
-		fmt.Sprintf("Sp:%d%%", gs.Spirit))
-	components = append(components, spirit)
-	
-	// Stance
+	// Stance - abbreviate in compact mode
 	stanceStr := getStanceName(gs.Stance)
+	if compactMode && len(stanceStr) > 3 {
+		stanceStr = stanceStr[:3]
+	}
 	stance := fmt.Sprintf("St:%s", stanceStr)
+	if compactMode {
+		stance = stanceStr
+	}
 	components = append(components, stance)
 	
 	// Build status line
-	status := strings.Join(components, " | ")
+	separator := " | "
+	if compactMode {
+		separator = " "
+	}
+	status := strings.Join(components, separator)
 	
 	// Add RT if present
 	if gs.Roundtime > 0 {
 		rt := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(
 			fmt.Sprintf("RT:%d", gs.Roundtime))
-		status += " | " + rt
-	}
-	
-	// Truncate status if too long for screen width
-	// Account for padding in status style (2 chars)
-	maxLen := m.width - 2
-	if maxLen > 0 && len(status) > maxLen {
-		// Try to intelligently truncate by removing less important info first
-		if gs.Roundtime == 0 && len(status) > maxLen {
-			// Remove RT section if no roundtime
-			status = strings.Join(components, " | ")
-		}
-		// If still too long, truncate with ellipsis
-		if len(status) > maxLen {
-			status = status[:maxLen-3] + "..."
-		}
+		status += separator + rt
 	}
 	
 	return status
