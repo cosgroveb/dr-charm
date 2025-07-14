@@ -27,6 +27,10 @@ type GameState struct {
 	RightHand        string
 	LeftHand         string
 	Spell            string
+	GameTime         string
+	FamiliarWindow   string
+	Triggers         []Trigger
+	Aliases          map[string]string
 }
 
 // RoomInfo holds current room information
@@ -35,6 +39,7 @@ type RoomInfo struct {
 	Title       string
 	Description string
 	Exits       []string
+	ExitsString string
 	Objects     []string
 	Players     []string
 }
