@@ -10,19 +10,23 @@ import (
 
 // GameState holds parsed game state
 type GameState struct {
-	Health      int
-	MaxHealth   int
-	Mana        int
-	MaxMana     int
-	Stamina     int
-	MaxStamina  int
-	Stance      int
-	Roundtime   int
-	CastRT      int
-	Room        RoomInfo
-	RightHand   string
-	LeftHand    string
-	Spell       string
+	Health        int
+	MaxHealth     int
+	Mana          int
+	MaxMana       int
+	Stamina       int
+	MaxStamina    int
+	Concentration int
+	MaxConcentration int
+	Spirit        int
+	MaxSpirit     int
+	Stance        int
+	Roundtime     int
+	CastRT        int
+	Room          RoomInfo
+	RightHand     string
+	LeftHand      string
+	Spell         string
 }
 
 // RoomInfo holds current room information
@@ -153,14 +157,16 @@ func (p *XMLParser) parseProgressBars(text string) {
 	
 	// Parse additional vitals that Outlander tracks
 	if val := extractProgressBar(text, "concentration"); val >= 0 {
-		// We could add concentration to GameState
+		p.state.Concentration = val
+		p.state.MaxConcentration = 100
 		if p.debug {
 			fmt.Printf("[DEBUG] Concentration: %d%%\n", val)
 		}
 	}
 	
 	if val := extractProgressBar(text, "spirit"); val >= 0 {
-		// We could add spirit to GameState
+		p.state.Spirit = val
+		p.state.MaxSpirit = 100
 		if p.debug {
 			fmt.Printf("[DEBUG] Spirit: %d%%\n", val)
 		}

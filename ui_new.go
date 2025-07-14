@@ -39,6 +39,10 @@ func InitialModelV2(conn net.Conn, api *GameAPI) ModelV2 {
 	gameState.MaxMana = 0
 	gameState.Stamina = 100
 	gameState.MaxStamina = 100
+	gameState.Concentration = 100
+	gameState.MaxConcentration = 100
+	gameState.Spirit = 100
+	gameState.MaxSpirit = 100
 	gameState.Stance = 3 // Standing
 	
 	return ModelV2{
@@ -253,61 +257,73 @@ func (m ModelV2) View() string {
 func (m ModelV2) buildStatusBar() string {
 	gs := m.gameState
 	
-	// If we have percentage-based health (0-100), use that
+	// Build status components
+	var components []string
+	
+	// Health - always show
 	healthColor := "196" // red
 	if gs.Health > 66 {
 		healthColor = "46" // green
 	} else if gs.Health > 33 {
 		healthColor = "226" // yellow
 	}
+	health := lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
+		fmt.Sprintf("H:%d%%", gs.Health))
+	components = append(components, health)
+	
+	// Mana - only show if player has mana
+	if gs.MaxMana > 0 && gs.Mana > 0 {
+		manaColor := "33" // blue
+		if gs.Mana < 33 {
+			manaColor = "196" // red
+		} else if gs.Mana < 66 {
+			manaColor = "226" // yellow
+		}
+		mana := lipgloss.NewStyle().Foreground(lipgloss.Color(manaColor)).Render(
+			fmt.Sprintf("M:%d%%", gs.Mana))
+		components = append(components, mana)
+	}
+	
+	// Stamina/Fatigue - always show
+	staminaColor := "214" // orange
+	if gs.Stamina < 33 {
+		staminaColor = "196" // red
+	} else if gs.Stamina < 66 {
+		staminaColor = "226" // yellow
+	}
+	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(
+		fmt.Sprintf("F:%d%%", gs.Stamina))
+	components = append(components, stamina)
+	
+	// Concentration - always show
+	concColor := "51" // cyan
+	if gs.Concentration < 33 {
+		concColor = "196" // red
+	} else if gs.Concentration < 66 {
+		concColor = "226" // yellow
+	}
+	conc := lipgloss.NewStyle().Foreground(lipgloss.Color(concColor)).Render(
+		fmt.Sprintf("C:%d%%", gs.Concentration))
+	components = append(components, conc)
+	
+	// Spirit - always show
+	spiritColor := "135" // purple
+	if gs.Spirit < 33 {
+		spiritColor = "196" // red
+	} else if gs.Spirit < 66 {
+		spiritColor = "226" // yellow
+	}
+	spirit := lipgloss.NewStyle().Foreground(lipgloss.Color(spiritColor)).Render(
+		fmt.Sprintf("Sp:%d%%", gs.Spirit))
+	components = append(components, spirit)
 	
 	// Stance
 	stanceStr := getStanceName(gs.Stance)
-	
-	// Build status components
-	var health, mana, stamina string
-	
-	// Show as percentages if max is 100
-	if gs.MaxHealth == 100 {
-		health = lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
-			fmt.Sprintf("H:%d%%", gs.Health))
-	} else {
-		health = lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
-			fmt.Sprintf("H:%d/%d", gs.Health, gs.MaxHealth))
-	}
-	
-	if gs.MaxMana == 100 {
-		manaColor := "33"
-		if gs.Mana < 33 {
-			manaColor = "196"
-		} else if gs.Mana < 66 {
-			manaColor = "226"
-		}
-		mana = lipgloss.NewStyle().Foreground(lipgloss.Color(manaColor)).Render(
-			fmt.Sprintf("M:%d%%", gs.Mana))
-	} else {
-		mana = lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(
-			fmt.Sprintf("M:%d/%d", gs.Mana, gs.MaxMana))
-	}
-	
-	if gs.MaxStamina == 100 {
-		staminaColor := "214"
-		if gs.Stamina < 33 {
-			staminaColor = "196"
-		} else if gs.Stamina < 66 {
-			staminaColor = "226"
-		}
-		stamina = lipgloss.NewStyle().Foreground(lipgloss.Color(staminaColor)).Render(
-			fmt.Sprintf("S:%d%%", gs.Stamina))
-	} else {
-		stamina = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(
-			fmt.Sprintf("S:%d/%d", gs.Stamina, gs.MaxStamina))
-	}
-	
 	stance := fmt.Sprintf("St:%s", stanceStr)
+	components = append(components, stance)
 	
-	// Build basic status
-	status := fmt.Sprintf("%s | %s | %s | %s", health, mana, stamina, stance)
+	// Build status line
+	status := strings.Join(components, " | ")
 	
 	// Add RT if present
 	if gs.Roundtime > 0 {
