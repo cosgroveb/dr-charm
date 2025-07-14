@@ -152,6 +152,22 @@ func (m ModelV2) View() string {
 		return "Goodbye!\n"
 	}
 
+	// Calculate component heights
+	titleHeight := 1
+	statusHeight := 1
+	inputHeight := 3 // border + content + border
+	errorHeight := 0
+	if m.err != nil {
+		errorHeight = 2
+	}
+	
+	// Calculate output window height
+	totalFixedHeight := titleHeight + statusHeight + inputHeight + errorHeight + 2 // +2 for margins
+	outputHeight := m.height - totalFixedHeight
+	if outputHeight < 3 {
+		outputHeight = 3
+	}
+
 	// Styles
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -163,14 +179,16 @@ func (m ModelV2) View() string {
 		Foreground(lipgloss.Color("240")).
 		Background(lipgloss.Color("235")).
 		Padding(0, 1).
-		Width(m.width)
+		Width(m.width).
+		MaxWidth(m.width)
 
 	outputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(1).
 		Width(m.width - 2).
-		Height(m.height - 8) // Adjusted for status bar
+		Height(outputHeight).
+		MaxHeight(outputHeight)
 
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -181,29 +199,43 @@ func (m ModelV2) View() string {
 	// Build status bar
 	statusBar := m.buildStatusBar()
 
-	// Build output
+	// Build output content
 	var output strings.Builder
-	boxHeight := m.height - 10 // Adjusted for status bar
+	
+	// Calculate visible lines (account for padding)
+	visibleLines := outputHeight - 2 // -2 for padding
+	if visibleLines < 1 {
+		visibleLines = 1
+	}
+	
+	// Get the lines to display
 	startIdx := 0
-	if len(m.output) > boxHeight {
-		startIdx = len(m.output) - boxHeight
+	if len(m.output) > visibleLines {
+		startIdx = len(m.output) - visibleLines
 	}
 
 	for i := startIdx; i < len(m.output); i++ {
-		output.WriteString(m.output[i] + "\n")
+		if i > startIdx {
+			output.WriteString("\n")
+		}
+		output.WriteString(m.output[i])
 	}
 
-	// Build view
-	s := titleStyle.Render("DragonRealms") + "\n"
-	s += statusStyle.Render(statusBar) + "\n"
-	s += outputStyle.Render(output.String()) + "\n"
-	s += inputStyle.Render("> " + m.input)
+	// Build view - order matters!
+	components := []string{
+		titleStyle.Render("DragonRealms"),
+		statusStyle.Render(statusBar),
+		outputStyle.Render(output.String()),
+		inputStyle.Render("> " + m.input),
+	}
+
+	result := strings.Join(components, "\n")
 
 	if m.err != nil {
-		s += "\n\nError: " + m.err.Error()
+		result += "\n\nError: " + m.err.Error()
 	}
 
-	return s
+	return result
 }
 
 func (m ModelV2) buildStatusBar() string {
@@ -221,49 +253,36 @@ func (m ModelV2) buildStatusBar() string {
 		healthColor = "226" // yellow
 	}
 	
-	// Calculate percentages for future use (e.g., bar visualization)
-	// manaPct := 0
-	// if gs.MaxMana > 0 {
-	// 	manaPct = gs.Mana * 100 / gs.MaxMana
-	// }
-	
-	// stamPct := 0
-	// if gs.MaxStamina > 0 {
-	// 	stamPct = gs.Stamina * 100 / gs.MaxStamina
-	// }
-	
 	// Stance
 	stanceStr := getStanceName(gs.Stance)
 	
-	// Build status line
+	// Build status components
 	health := lipgloss.NewStyle().Foreground(lipgloss.Color(healthColor)).Render(
 		fmt.Sprintf("H:%d/%d", gs.Health, gs.MaxHealth))
 	mana := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Render(
 		fmt.Sprintf("M:%d/%d", gs.Mana, gs.MaxMana))
 	stamina := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(
 		fmt.Sprintf("S:%d/%d", gs.Stamina, gs.MaxStamina))
-	stance := fmt.Sprintf("Stance:%s", stanceStr)
+	stance := fmt.Sprintf("St:%s", stanceStr)
 	
-	rt := ""
+	// Build basic status
+	status := fmt.Sprintf("%s | %s | %s | %s", health, mana, stamina, stance)
+	
+	// Add RT if present
 	if gs.Roundtime > 0 {
-		rt = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(
-			fmt.Sprintf(" RT:%d", gs.Roundtime))
+		rt := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render(
+			fmt.Sprintf("RT:%d", gs.Roundtime))
+		status += " | " + rt
 	}
 	
-	hands := ""
-	if gs.RightHand != "" || gs.LeftHand != "" {
-		r := gs.RightHand
-		if r == "" {
-			r = "Empty"
-		}
-		l := gs.LeftHand
-		if l == "" {
-			l = "Empty"
-		}
-		hands = fmt.Sprintf(" | R:%s L:%s", r, l)
+	// Truncate status if too long for screen width
+	// Account for padding in status style (2 chars)
+	maxLen := m.width - 2
+	if len(status) > maxLen && maxLen > 20 {
+		status = status[:maxLen-3] + "..."
 	}
 	
-	return fmt.Sprintf("%s | %s | %s | %s%s%s", health, mana, stamina, stance, rt, hands)
+	return status
 }
 
 func getStanceName(stance int) string {
