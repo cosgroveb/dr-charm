@@ -36,6 +36,7 @@ func (m *DrCharm) Build(
 			WithMountedDirectory("/src", source).
 			WithWorkdir("/src").
 			WithEnvVariable("CGO_ENABLED", "0").
+			WithExec([]string{"go", "mod", "download"}).
 			WithExec(append(parts, "go", "build", "-o", fmt.Sprintf("dr-charm-%s", strings.ReplaceAll(platform, "/", "-")), ".")).
 			File(fmt.Sprintf("/src/dr-charm-%s", strings.ReplaceAll(platform, "/", "-")))
 
@@ -51,6 +52,7 @@ func (m *DrCharm) Test(ctx context.Context, source *dagger.Directory) error {
 		From("golang:1.23-alpine").
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
+		WithExec([]string{"go", "mod", "download"}).
 		WithExec([]string{"go", "test", "-v", "./..."}).
 		Stdout(ctx)
 
@@ -80,6 +82,7 @@ func (m *DrCharm) Lint(ctx context.Context, source *dagger.Directory) error {
 		From("golang:1.23-alpine").
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
+		WithExec([]string{"go", "mod", "download"}).
 		WithExec([]string{"go", "vet", "./..."}).
 		Stdout(ctx)
 
