@@ -70,7 +70,7 @@ func NewGameAPI(gameConn net.Conn, character string, bufferSize int) *GameAPI {
 func (api *GameAPI) AddOutput(text string) {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	
+
 	id := api.lastID.Add(1)
 	line := OutputLine{
 		ID:        id,
@@ -87,23 +87,23 @@ func (api *GameAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	var req CommandRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	
+
 	if req.Command == "" {
 		http.Error(w, "Command cannot be empty", http.StatusBadRequest)
 		return
 	}
-	
+
 	if !api.connected.Load() {
 		http.Error(w, "Game connection lost", http.StatusServiceUnavailable)
 		return
 	}
-	
+
 	// Send command to game
 	_, err := api.gameConn.Write([]byte(req.Command + "\n"))
 	if err != nil {
@@ -111,15 +111,15 @@ func (api *GameAPI) handleCommand(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to send command", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Record the command in output
 	api.AddOutput("> " + req.Command)
-	
+
 	resp := CommandResponse{
 		Status: "sent",
 		ID:     api.lastID.Load(),
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -130,17 +130,17 @@ func (api *GameAPI) handleOutput(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	sinceID := uint64(0)
 	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
 		if parsed, err := strconv.ParseUint(sinceStr, 10, 64); err == nil {
 			sinceID = parsed
 		}
 	}
-	
+
 	api.mu.RLock()
 	defer api.mu.RUnlock()
-	
+
 	var lines []OutputLine
 	api.outputBuffer.Do(func(v interface{}) {
 		if v != nil {
@@ -149,12 +149,12 @@ func (api *GameAPI) handleOutput(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	})
-	
+
 	resp := OutputResponse{
 		Lines:  lines,
 		LastID: api.lastID.Load(),
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -165,18 +165,18 @@ func (api *GameAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	status := "disconnected"
 	if api.connected.Load() {
 		status = "connected"
 	}
-	
+
 	resp := HealthResponse{
 		Status:    status,
 		Character: api.character,
 		Uptime:    time.Since(startTime).Round(time.Second).String(),
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -184,24 +184,24 @@ func (api *GameAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 // StartAPIServer starts the HTTP API server
 func StartAPIServer(api *GameAPI, addr string) error {
 	mux := http.NewServeMux()
-	
+
 	mux.HandleFunc("/command", api.handleCommand)
 	mux.HandleFunc("/output", api.handleOutput)
 	mux.HandleFunc("/health", api.handleHealth)
-	
+
 	// Add CORS headers for local development
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		
+
 		if r.Method == "OPTIONS" {
 			return
 		}
-		
+
 		mux.ServeHTTP(w, r)
 	})
-	
+
 	fmt.Printf("API server listening on %s\n", addr)
 	return http.ListenAndServe(addr, handler)
 }
