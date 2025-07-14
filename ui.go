@@ -11,13 +11,13 @@ import (
 
 // Model holds the application state
 type Model struct {
-	conn       net.Conn
-	output     []string
-	input      string
-	err        error
-	quitting   bool
-	width      int
-	height     int
+	conn     net.Conn
+	output   []string
+	input    string
+	err      error
+	quitting bool
+	width    int
+	height   int
 }
 
 // Message types
@@ -72,11 +72,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input += string(msg.Runes)
 			}
 		}
-	
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		
+
 	case gameOutputMsg:
 		// Add game output
 		text := string(msg)
@@ -95,13 +95,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Continue reading
 		return m, readGameOutput(m.conn)
-		
+
 	case errMsg:
 		m.err = msg
 		m.quitting = true
 		return m, tea.Quit
 	}
-	
+
 	return m, nil
 }
 
@@ -110,49 +110,49 @@ func (m Model) View() string {
 	if m.quitting {
 		return "Goodbye!\n"
 	}
-	
+
 	// Styles
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("170")).
 		MarginBottom(1)
-		
+
 	outputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(1).
 		Width(m.width - 2).
 		Height(m.height - 6)
-		
+
 	inputStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(0, 1).
 		Width(m.width - 2)
-	
+
 	// Build output
 	var output strings.Builder
-	
+
 	// Show last N lines that fit in the box
 	boxHeight := m.height - 8
 	startIdx := 0
 	if len(m.output) > boxHeight {
 		startIdx = len(m.output) - boxHeight
 	}
-	
+
 	for i := startIdx; i < len(m.output); i++ {
 		output.WriteString(m.output[i] + "\n")
 	}
-	
+
 	// Build view
 	s := titleStyle.Render("DragonRealms") + "\n"
 	s += outputStyle.Render(output.String()) + "\n"
 	s += inputStyle.Render("> " + m.input)
-	
+
 	if m.err != nil {
 		s += "\n\nError: " + m.err.Error()
 	}
-	
+
 	return s
 }
 
@@ -160,7 +160,7 @@ func (m Model) View() string {
 func readGameOutput(conn net.Conn) tea.Cmd {
 	return func() tea.Msg {
 		var output strings.Builder
-		
+
 		// Read some data
 		for i := 0; i < 100; i++ { // Read up to 100 bytes at a time
 			b := make([]byte, 1)
@@ -168,7 +168,7 @@ func readGameOutput(conn net.Conn) tea.Cmd {
 			if err != nil {
 				return errMsg(err)
 			}
-			
+
 			// Basic XML stripping
 			char := string(b[0])
 			if char == "<" {
@@ -184,15 +184,15 @@ func readGameOutput(conn net.Conn) tea.Cmd {
 				}
 				continue
 			}
-			
+
 			output.WriteString(char)
-			
+
 			// If we hit a newline, return what we have
 			if char == "\n" {
 				break
 			}
 		}
-		
+
 		return gameOutputMsg(output.String())
 	}
 }
