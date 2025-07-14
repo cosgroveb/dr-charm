@@ -85,85 +85,84 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 }
 
 func (p *XMLParser) parseProgressBars(text string) {
-	// Parse health bar
-	if idx := strings.Index(text, `<progressBar id="health`); idx >= 0 {
-		end := strings.Index(text[idx:], "/>")
-		if end > 0 {
-			healthBar := text[idx : idx+end+2]
-			// Extract value
-			if valueIdx := strings.Index(healthBar, `value="`); valueIdx >= 0 {
-				valueEnd := strings.Index(healthBar[valueIdx+7:], `"`)
-				if valueEnd > 0 {
-					value := healthBar[valueIdx+7 : valueIdx+7+valueEnd]
-					if val, err := fmt.Sscanf(value, "%d", &p.state.Health); err == nil && val == 1 {
-						p.state.MaxHealth = 100 // Percentage based
-						if p.debug {
-							fmt.Printf("[DEBUG] Health: %d%%\n", p.state.Health)
+	// Helper to extract progressBar value
+	extractProgressBar := func(text, id string) int {
+		searchStr := fmt.Sprintf(`<progressBar id="%s"`, id)
+		if idx := strings.Index(text, searchStr); idx >= 0 {
+			end := strings.Index(text[idx:], "/>")
+			if end > 0 {
+				bar := text[idx : idx+end+2]
+				// Extract value
+				if valueIdx := strings.Index(bar, `value="`); valueIdx >= 0 {
+					valueEnd := strings.Index(bar[valueIdx+7:], `"`)
+					if valueEnd > 0 {
+						value := bar[valueIdx+7 : valueIdx+7+valueEnd]
+						var result int
+						if val, err := fmt.Sscanf(value, "%d", &result); err == nil && val == 1 {
+							return result
 						}
 					}
 				}
 			}
+		}
+		return -1 // Not found
+	}
+	
+	// Parse all vitals - try both with and without "2" suffix
+	if val := extractProgressBar(text, "health"); val >= 0 {
+		p.state.Health = val
+		p.state.MaxHealth = 100
+		if p.debug {
+			fmt.Printf("[DEBUG] Health: %d%%\n", val)
+		}
+	} else if val := extractProgressBar(text, "health2"); val >= 0 {
+		p.state.Health = val
+		p.state.MaxHealth = 100
+		if p.debug {
+			fmt.Printf("[DEBUG] Health2: %d%%\n", val)
 		}
 	}
 	
-	// Parse mana bar
-	if idx := strings.Index(text, `<progressBar id="mana`); idx >= 0 {
-		end := strings.Index(text[idx:], "/>")
-		if end > 0 {
-			manaBar := text[idx : idx+end+2]
-			// Extract value
-			if valueIdx := strings.Index(manaBar, `value="`); valueIdx >= 0 {
-				valueEnd := strings.Index(manaBar[valueIdx+7:], `"`)
-				if valueEnd > 0 {
-					value := manaBar[valueIdx+7 : valueIdx+7+valueEnd]
-					if val, err := fmt.Sscanf(value, "%d", &p.state.Mana); err == nil && val == 1 {
-						p.state.MaxMana = 100 // Percentage based
-						if p.debug {
-							fmt.Printf("[DEBUG] Mana: %d%%\n", p.state.Mana)
-						}
-					}
-				}
-			}
+	if val := extractProgressBar(text, "mana"); val >= 0 {
+		p.state.Mana = val
+		p.state.MaxMana = 100
+		if p.debug {
+			fmt.Printf("[DEBUG] Mana: %d%%\n", val)
+		}
+	} else if val := extractProgressBar(text, "mana2"); val >= 0 {
+		p.state.Mana = val
+		p.state.MaxMana = 100
+		if p.debug {
+			fmt.Printf("[DEBUG] Mana2: %d%%\n", val)
 		}
 	}
 	
-	// Parse stamina/fatigue bar
-	if idx := strings.Index(text, `<progressBar id="stamina`); idx >= 0 {
-		end := strings.Index(text[idx:], "/>")
-		if end > 0 {
-			staminaBar := text[idx : idx+end+2]
-			// Extract value
-			if valueIdx := strings.Index(staminaBar, `value="`); valueIdx >= 0 {
-				valueEnd := strings.Index(staminaBar[valueIdx+7:], `"`)
-				if valueEnd > 0 {
-					value := staminaBar[valueIdx+7 : valueIdx+7+valueEnd]
-					if val, err := fmt.Sscanf(value, "%d", &p.state.Stamina); err == nil && val == 1 {
-						p.state.MaxStamina = 100 // Percentage based
-						if p.debug {
-							fmt.Printf("[DEBUG] Stamina: %d%%\n", p.state.Stamina)
-						}
-					}
-				}
-			}
+	if val := extractProgressBar(text, "stamina"); val >= 0 {
+		p.state.Stamina = val
+		p.state.MaxStamina = 100
+		if p.debug {
+			fmt.Printf("[DEBUG] Stamina: %d%%\n", val)
 		}
-	} else if idx := strings.Index(text, `<progressBar id="fatigue`); idx >= 0 {
-		// Some versions use fatigue instead of stamina
-		end := strings.Index(text[idx:], "/>")
-		if end > 0 {
-			fatigueBar := text[idx : idx+end+2]
-			// Extract value
-			if valueIdx := strings.Index(fatigueBar, `value="`); valueIdx >= 0 {
-				valueEnd := strings.Index(fatigueBar[valueIdx+7:], `"`)
-				if valueEnd > 0 {
-					value := fatigueBar[valueIdx+7 : valueIdx+7+valueEnd]
-					if val, err := fmt.Sscanf(value, "%d", &p.state.Stamina); err == nil && val == 1 {
-						p.state.MaxStamina = 100 // Percentage based
-						if p.debug {
-							fmt.Printf("[DEBUG] Fatigue: %d%%\n", p.state.Stamina)
-						}
-					}
-				}
-			}
+	} else if val := extractProgressBar(text, "fatigue"); val >= 0 {
+		p.state.Stamina = val
+		p.state.MaxStamina = 100
+		if p.debug {
+			fmt.Printf("[DEBUG] Fatigue: %d%%\n", val)
+		}
+	}
+	
+	// Parse additional vitals that Outlander tracks
+	if val := extractProgressBar(text, "concentration"); val >= 0 {
+		// We could add concentration to GameState
+		if p.debug {
+			fmt.Printf("[DEBUG] Concentration: %d%%\n", val)
+		}
+	}
+	
+	if val := extractProgressBar(text, "spirit"); val >= 0 {
+		// We could add spirit to GameState
+		if p.debug {
+			fmt.Printf("[DEBUG] Spirit: %d%%\n", val)
 		}
 	}
 }
