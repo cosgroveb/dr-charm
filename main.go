@@ -238,10 +238,22 @@ func main() {
 	}
 
 	fmt.Println("\n=== Connected to DragonRealms ===")
+	
+	// Create API instance
+	api := NewGameAPI(gameConn, character, 1000) // 1000 line buffer
+	
+	// Start API server in background
+	go func() {
+		if err := StartAPIServer(api, ":8080"); err != nil {
+			fmt.Printf("API server error: %v\n", err)
+		}
+	}()
+	
+	fmt.Println("API server starting on http://localhost:8080")
 	fmt.Println("Launching UI...")
-
+	
 	// Start Bubble Tea UI
-	p := tea.NewProgram(InitialModel(gameConn), tea.WithAltScreen())
+	p := tea.NewProgram(InitialModel(gameConn, api), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		panic(fmt.Sprintf("Failed to start UI: %v", err))
 	}

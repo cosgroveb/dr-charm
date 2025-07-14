@@ -12,6 +12,7 @@ import (
 // Model holds the application state
 type Model struct {
 	conn     net.Conn
+	api      *GameAPI
 	output   []string
 	input    string
 	err      error
@@ -25,9 +26,10 @@ type gameOutputMsg string
 type errMsg error
 
 // InitialModel creates the initial model
-func InitialModel(conn net.Conn) Model {
+func InitialModel(conn net.Conn, api *GameAPI) Model {
 	return Model{
 		conn:   conn,
+		api:    api,
 		output: []string{"Connected to DragonRealms"},
 		input:  "",
 	}
@@ -55,8 +57,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.err = err
 					return m, nil
 				}
-				// Add to output
+				// Add to output and API buffer
 				m.output = append(m.output, "> "+m.input)
+				if m.api != nil {
+					m.api.AddOutput("> " + m.input)
+				}
 				// Keep only last 100 lines
 				if len(m.output) > 100 {
 					m.output = m.output[len(m.output)-100:]
@@ -87,6 +92,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, line := range lines {
 			if line != "" {
 				m.output = append(m.output, line)
+				if m.api != nil {
+					m.api.AddOutput(line)
+				}
 			}
 		}
 		// Keep only last 100 lines
@@ -99,6 +107,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg
 		m.quitting = true
+		if m.api != nil {
+			m.api.connected.Store(false)
+		}
 		return m, tea.Quit
 	}
 

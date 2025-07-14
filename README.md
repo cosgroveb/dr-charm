@@ -44,6 +44,22 @@ go build -o dr-charm .
 - Ctrl+C or Esc to exit
 - Backspace to delete characters
 
+## API Server
+
+The client automatically starts an HTTP API server on port 8080 that allows external control:
+
+```bash
+# Send a command
+curl -X POST http://localhost:8080/command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "look"}'
+
+# Get recent output
+curl http://localhost:8080/output
+```
+
+See [API.md](API.md) for full documentation.
+
 ## Next Steps
 
 Refer to the full specification for planned features:
