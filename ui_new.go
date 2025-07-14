@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -141,6 +142,14 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.api != nil {
 					m.api.AddOutput(line)
 				}
+				// Check for connection message and auto-send look
+				if strings.Contains(line, "Please wait for connection") {
+					// Send look command after a brief delay
+					go func() {
+						time.Sleep(500 * time.Millisecond)
+						m.conn.Write([]byte("look\n"))
+					}()
+				}
 			}
 		}
 		// Keep only last 1000 lines
@@ -238,9 +247,15 @@ func (m ModelV2) View() string {
 		output.WriteString(m.output[i])
 	}
 
+	// Build title with room name
+	title := "DragonRealms"
+	if m.gameState.Room.Title != "" {
+		title = fmt.Sprintf("DragonRealms - %s", m.gameState.Room.Title)
+	}
+
 	// Build view - order matters!
 	components := []string{
-		titleStyle.Render("DragonRealms"),
+		titleStyle.Render(title),
 		statusStyle.Render(statusBar),
 		outputStyle.Render(output.String()),
 		inputStyle.Render("> " + m.input),

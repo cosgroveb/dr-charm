@@ -72,6 +72,11 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 		p.parseProgressBars(text)
 	}
 
+	// Parse room title from streamwindow
+	if strings.Contains(text, "streamwindow") {
+		p.parseRoomTitle(text)
+	}
+
 	// Basic XML stripping for display
 	result := ""
 	inTag := false
@@ -86,6 +91,32 @@ func (p *XMLParser) ParseStream(reader io.Reader) (string, error) {
 	}
 
 	return result, nil
+}
+
+func (p *XMLParser) parseRoomTitle(text string) {
+	// Look for streamwindow with id="main" and extract subtitle
+	if idx := strings.Index(text, `<streamwindow id="main"`); idx >= 0 {
+		// Find the end of this tag
+		endIdx := strings.Index(text[idx:], "/>")
+		if endIdx > 0 {
+			windowTag := text[idx : idx+endIdx+2]
+			// Extract subtitle attribute
+			if subIdx := strings.Index(windowTag, `subtitle="`); subIdx >= 0 {
+				subStart := subIdx + 10 // len(`subtitle="`)
+				subEnd := strings.Index(windowTag[subStart:], `"`)
+				if subEnd > 0 {
+					subtitle := windowTag[subStart : subStart+subEnd]
+					// Remove " - " prefix if present
+					if strings.HasPrefix(subtitle, " - ") {
+						p.state.Room.Title = subtitle[3:]
+						if p.debug {
+							fmt.Printf("[DEBUG] Room title: %s\n", p.state.Room.Title)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 func (p *XMLParser) parseProgressBars(text string) {
@@ -288,6 +319,20 @@ func (p *XMLParser) handleStartElement(start xml.StartElement) {
 		for _, attr := range start.Attr {
 			if attr.Name.Local == "id" && attr.Value == "roomName" {
 				// Next text is room name
+			}
+		}
+
+	case "streamwindow":
+		// Extract room title from subtitle attribute for main window
+		for _, attr := range start.Attr {
+			if attr.Name.Local == "id" && attr.Value == "main" {
+				// Look for subtitle attribute
+				for _, subAttr := range start.Attr {
+					if subAttr.Name.Local == "subtitle" && len(subAttr.Value) > 3 {
+						// Remove the " - " prefix
+						p.state.Room.Title = subAttr.Value[3:]
+					}
+				}
 			}
 		}
 	}
