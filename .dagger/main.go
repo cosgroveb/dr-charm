@@ -16,7 +16,7 @@ func (m *DrCharm) Build(
 	ctx context.Context,
 	source *dagger.Directory,
 	// +optional
-	// +default=["linux/amd64", "darwin/amd64", "darwin/arm64"]
+	// +default=["linux/amd64", "darwin/amd64", "darwin/arm64", "windows/amd64"]
 	platforms []string,
 ) ([]*dagger.File, error) {
 	var builds []*dagger.File
@@ -30,8 +30,8 @@ func (m *DrCharm) Build(
 			WithEnvVariable("GOOS", strings.Split(platform, "/")[0]).
 			WithEnvVariable("GOARCH", strings.Split(platform, "/")[1]).
 			WithExec([]string{"go", "mod", "download"}).
-			WithExec([]string{"go", "build", "-o", fmt.Sprintf("dr-charm-%s", strings.ReplaceAll(platform, "/", "-")), "."}).
-			File(fmt.Sprintf("/src/dr-charm-%s", strings.ReplaceAll(platform, "/", "-")))
+			WithExec([]string{"go", "build", "-o", fmt.Sprintf("dr-charm-%s%s", strings.ReplaceAll(platform, "/", "-"), getExeSuffix(platform)), "."}).
+			File(fmt.Sprintf("/src/dr-charm-%s%s", strings.ReplaceAll(platform, "/", "-"), getExeSuffix(platform)))
 
 		builds = append(builds, binary)
 	}
@@ -98,13 +98,21 @@ func (m *DrCharm) Ci(ctx context.Context, source *dagger.Directory) error {
 
 	// Build binaries
 	fmt.Println("Building binaries...")
-	builds, err := m.Build(ctx, source, []string{"linux/amd64", "darwin/amd64", "darwin/arm64"})
+	builds, err := m.Build(ctx, source, []string{"linux/amd64", "darwin/amd64", "darwin/arm64", "windows/amd64"})
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
 
 	fmt.Printf("Successfully built %d binaries\n", len(builds))
 	return nil
+}
+
+// getExeSuffix returns .exe for Windows platforms
+func getExeSuffix(platform string) string {
+	if strings.Contains(platform, "windows") {
+		return ".exe"
+	}
+	return ""
 }
 
 // Release creates a GitHub release with binaries
@@ -115,7 +123,7 @@ func (m *DrCharm) Release(
 	githubToken *dagger.Secret,
 ) error {
 	// Build all platforms
-	builds, err := m.Build(ctx, source, []string{"linux/amd64", "darwin/amd64", "darwin/arm64"})
+	builds, err := m.Build(ctx, source, []string{"linux/amd64", "darwin/amd64", "darwin/arm64", "windows/amd64"})
 	if err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
@@ -129,9 +137,10 @@ func (m *DrCharm) Release(
 		WithSecretVariable("GITHUB_TOKEN", githubToken)
 
 	// Upload binaries
+	platforms := []string{"linux-amd64", "darwin-amd64", "darwin-arm64", "windows-amd64"}
 	for i, binary := range builds {
-		platforms := []string{"linux-amd64", "darwin-amd64", "darwin-arm64"}
-		container = container.WithFile(fmt.Sprintf("/tmp/dr-charm-%s", platforms[i]), binary)
+		fileName := fmt.Sprintf("/tmp/dr-charm-%s%s", platforms[i], getExeSuffix(platforms[i]))
+		container = container.WithFile(fileName, binary)
 	}
 
 	// Create release
@@ -140,6 +149,7 @@ func (m *DrCharm) Release(
 			"/tmp/dr-charm-linux-amd64",
 			"/tmp/dr-charm-darwin-amd64",
 			"/tmp/dr-charm-darwin-arm64",
+			"/tmp/dr-charm-windows-amd64.exe",
 			"--title", fmt.Sprintf("DragonRealms Charm CLI %s", version),
 			"--notes", "DragonRealms client with Charm UI",
 		}).
