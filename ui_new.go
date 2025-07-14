@@ -27,6 +27,8 @@ type ModelV2 struct {
 	parser       *XMLParser
 	vitalsParser *VitalsParser
 	gameState    *GameState
+	scrollOffset int  // How many lines scrolled up from bottom
+	autoScroll   bool // Whether to auto-scroll on new content
 }
 
 // InitialModelV2 creates the enhanced model
@@ -57,6 +59,8 @@ func InitialModelV2(conn net.Conn, api *GameAPI) ModelV2 {
 		gameState:    gameState,
 		width:        80, // Default width
 		height:       24, // Default height
+		scrollOffset: 0,
+		autoScroll:   true,
 	}
 }
 
@@ -94,6 +98,9 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.output = m.output[len(m.output)-1000:]
 				}
 				m.input = ""
+				// Auto-scroll to bottom when sending commands
+				m.scrollOffset = 0
+				m.autoScroll = true
 			}
 
 		case tea.KeyUp:
@@ -122,6 +129,51 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeySpace:
 			m.input += " "
+
+		case tea.KeyPgUp:
+			// Page up - scroll up by visible lines
+			visibleLines := m.height - 10 // Approximate visible lines
+			if visibleLines < 1 {
+				visibleLines = 1
+			}
+			m.scrollOffset += visibleLines
+			maxOffset := len(m.output) - visibleLines
+			if maxOffset < 0 {
+				maxOffset = 0
+			}
+			if m.scrollOffset > maxOffset {
+				m.scrollOffset = maxOffset
+			}
+			m.autoScroll = false
+
+		case tea.KeyPgDown:
+			// Page down - scroll down by visible lines
+			visibleLines := m.height - 10
+			if visibleLines < 1 {
+				visibleLines = 1
+			}
+			m.scrollOffset -= visibleLines
+			if m.scrollOffset <= 0 {
+				m.scrollOffset = 0
+				m.autoScroll = true
+			}
+
+		case tea.KeyHome:
+			// Jump to top
+			visibleLines := m.height - 10
+			if visibleLines < 1 {
+				visibleLines = 1
+			}
+			m.scrollOffset = len(m.output) - visibleLines
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+			m.autoScroll = false
+
+		case tea.KeyEnd:
+			// Jump to bottom
+			m.scrollOffset = 0
+			m.autoScroll = true
 
 		default:
 			if msg.Type == tea.KeyRunes {
@@ -155,6 +207,10 @@ func (m ModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep only last 1000 lines
 		if len(m.output) > 1000 {
 			m.output = m.output[len(m.output)-1000:]
+		}
+		// Reset scroll to bottom if autoScroll is enabled
+		if m.autoScroll {
+			m.scrollOffset = 0
 		}
 		// Update game state
 		m.gameState = msg.state
@@ -234,17 +290,32 @@ func (m ModelV2) View() string {
 		visibleLines = 1
 	}
 
-	// Get the lines to display
-	startIdx := 0
-	if len(m.output) > visibleLines {
-		startIdx = len(m.output) - visibleLines
+	// Get the lines to display with scroll offset
+	totalLines := len(m.output)
+	endIdx := totalLines - m.scrollOffset
+	startIdx := endIdx - visibleLines
+
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx > totalLines {
+		endIdx = totalLines
 	}
 
-	for i := startIdx; i < len(m.output); i++ {
+	for i := startIdx; i < endIdx; i++ {
 		if i > startIdx {
 			output.WriteString("\n")
 		}
 		output.WriteString(m.output[i])
+	}
+
+	// Add scroll indicator if not at bottom
+	if m.scrollOffset > 0 {
+		scrollInfo := fmt.Sprintf("\n[Scrolled up %d lines - PgDn/End to return]", m.scrollOffset)
+		output.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240")).
+			Italic(true).
+			Render(scrollInfo))
 	}
 
 	// Build title with room name
