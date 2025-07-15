@@ -18,7 +18,7 @@ type EventMetrics struct {
 // Calculate latencies between stages
 func (e EventMetrics) Latencies() map[string]time.Duration {
 	latencies := make(map[string]time.Duration)
-	
+
 	if !e.ReceiveTime.IsZero() && !e.ParseEndTime.IsZero() {
 		latencies["parse"] = e.ParseEndTime.Sub(e.ReceiveTime)
 	}
@@ -34,17 +34,17 @@ func (e EventMetrics) Latencies() map[string]time.Duration {
 	if !e.ReceiveTime.IsZero() && !e.RenderTime.IsZero() {
 		latencies["total"] = e.RenderTime.Sub(e.ReceiveTime)
 	}
-	
+
 	return latencies
 }
 
 // PerformanceTracker tracks event loop performance
 type PerformanceTracker struct {
-	mu              sync.Mutex
-	events          []EventMetrics
-	maxEvents       int
-	slowThreshold   time.Duration
-	debug           bool
+	mu            sync.Mutex
+	events        []EventMetrics
+	maxEvents     int
+	slowThreshold time.Duration
+	debug         bool
 }
 
 // NewPerformanceTracker creates a new performance tracker
@@ -67,14 +67,14 @@ func (p *PerformanceTracker) StartEvent() *EventMetrics {
 func (p *PerformanceTracker) RecordEvent(event *EventMetrics) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	p.events = append(p.events, *event)
-	
+
 	// Keep bounded history
 	if len(p.events) > p.maxEvents {
 		p.events = p.events[len(p.events)-p.maxEvents:]
 	}
-	
+
 	// Log slow events
 	latencies := event.Latencies()
 	if total, ok := latencies["total"]; ok && total > p.slowThreshold {
@@ -93,15 +93,15 @@ func (p *PerformanceTracker) RecordEvent(event *EventMetrics) {
 func (p *PerformanceTracker) GetStats() map[string]interface{} {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	if len(p.events) == 0 {
 		return nil
 	}
-	
+
 	// Calculate averages and percentiles
 	var totalTimes []time.Duration
 	stageTimes := make(map[string][]time.Duration)
-	
+
 	for _, event := range p.events {
 		latencies := event.Latencies()
 		for stage, duration := range latencies {
@@ -111,17 +111,17 @@ func (p *PerformanceTracker) GetStats() map[string]interface{} {
 			}
 		}
 	}
-	
+
 	stats := make(map[string]interface{})
 	stats["event_count"] = len(p.events)
-	
+
 	// Calculate stats for each stage
 	for stage, times := range stageTimes {
 		if len(times) > 0 {
 			avg := calculateAverage(times)
 			p95 := calculatePercentile(times, 95)
 			max := calculateMax(times)
-			
+
 			stats[stage] = map[string]float64{
 				"avg_ms": avg.Seconds() * 1000,
 				"p95_ms": p95.Seconds() * 1000,
@@ -129,7 +129,7 @@ func (p *PerformanceTracker) GetStats() map[string]interface{} {
 			}
 		}
 	}
-	
+
 	return stats
 }
 

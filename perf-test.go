@@ -48,31 +48,31 @@ func RunPerfTest() {
 	// Process each chunk and measure performance
 	for i, data := range testData {
 		event := perfTracker.StartEvent()
-		
+
 		// Simulate network delay
 		time.Sleep(10 * time.Millisecond)
-		
+
 		// Parse XML
 		text, err := xmlParser.ParseChunk([]byte(data))
 		event.ParseEndTime = time.Now()
-		
+
 		if err != nil {
 			fmt.Printf("Parse error on chunk %d: %v\n", i, err)
 		}
-		
+
 		// Simulate state update
 		event.StateUpdTime = time.Now()
-		
+
 		// Simulate UI update
 		time.Sleep(5 * time.Millisecond)
 		event.UIUpdateTime = time.Now()
-		
+
 		// Simulate render
 		time.Sleep(2 * time.Millisecond)
 		event.RenderTime = time.Now()
-		
+
 		perfTracker.RecordEvent(event)
-		
+
 		if text != "" {
 			fmt.Printf("Output: %s\n", text)
 		}
@@ -85,7 +85,7 @@ func RunPerfTest() {
 		if eventCount, ok := stats["event_count"].(int); ok {
 			fmt.Printf("Events tracked: %d\n", eventCount)
 		}
-		
+
 		stages := []string{"parse", "state", "ui_update", "render", "total"}
 		for _, stage := range stages {
 			if stageStats, ok := stats[stage].(map[string]float64); ok {

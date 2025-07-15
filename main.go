@@ -250,14 +250,14 @@ func main() {
 	}()
 
 	fmt.Println("API server starting on http://localhost:8080")
-	
+
 	// Check for CLI mode
 	if os.Getenv("DR_CHARM_CLI") == "true" {
 		fmt.Println("Running in CLI mode for testing...")
 		RunCLIMode(gameConn, api)
 		return
 	}
-	
+
 	fmt.Println("Launching UI...")
 
 	// Start Bubble Tea UI - Enhanced UI is now the default

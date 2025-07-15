@@ -7,13 +7,13 @@ import (
 
 // GamePaneMetrics tracks detailed performance for game pane operations
 type GamePaneMetrics struct {
-	ParseStart    time.Time
-	FilterTime    time.Duration
-	TriggerTime   time.Duration
-	OutputTime    time.Duration
-	LayoutTime    time.Duration
-	TotalTime     time.Duration
-	LineCount     int
+	ParseStart  time.Time
+	FilterTime  time.Duration
+	TriggerTime time.Duration
+	OutputTime  time.Duration
+	LayoutTime  time.Duration
+	TotalTime   time.Duration
+	LineCount   int
 }
 
 func (g GamePaneMetrics) String() string {

@@ -26,7 +26,7 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 		for {
 			// Start event tracking
 			event := perfTracker.StartEvent()
-			
+
 			buf := make([]byte, 4096)
 			n, err := gameConn.Read(buf)
 			if err != nil {
@@ -38,7 +38,7 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 			text, err := xmlParser.ParseChunk(buf[:n])
 			event.ParseEndTime = time.Now()
 			event.StateUpdTime = time.Now() // State updated during parsing
-			
+
 			if err != nil {
 				text = string(buf[:n])
 			}
@@ -53,11 +53,11 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 					}
 				}
 			}
-			
+
 			// UI update time (console print)
 			event.UIUpdateTime = time.Now()
 			event.RenderTime = time.Now()
-			
+
 			// Record the event
 			perfTracker.RecordEvent(event)
 		}
@@ -67,12 +67,12 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		input := scanner.Text()
-		
+
 		if input == "quit" {
 			fmt.Println("Goodbye!")
 			return
 		}
-		
+
 		if input == "stats" {
 			// Display performance stats
 			stats := perfTracker.GetStats()
@@ -81,7 +81,7 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 				if eventCount, ok := stats["event_count"].(int); ok {
 					fmt.Printf("Events tracked: %d\n", eventCount)
 				}
-				
+
 				stages := []string{"parse", "state", "ui_update", "render", "total"}
 				for _, stage := range stages {
 					if stageStats, ok := stats[stage].(map[string]float64); ok {
@@ -96,7 +96,7 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 			}
 			continue
 		}
-		
+
 		// Send command to game
 		_, err := gameConn.Write([]byte(input + "\n"))
 		if err != nil {

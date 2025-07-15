@@ -50,7 +50,7 @@ func NewTriggerManager() *TriggerManager {
 	// Add some default triggers for common DragonRealms events
 	tm.AddDefaultTriggers()
 	tm.AddDefaultAliases()
-	
+
 	// Build trigger cache for performance
 	tm.cache = BuildTriggerCache(tm.triggers)
 
@@ -207,7 +207,7 @@ func (tm *TriggerManager) ProcessLine(line string) string {
 	if line == "" {
 		return line
 	}
-	
+
 	// Track all matches and their positions
 	type match struct {
 		start, end int
@@ -225,7 +225,7 @@ func (tm *TriggerManager) ProcessLine(line string) string {
 		if tm.triggers[i].Regex == nil {
 			continue
 		}
-		
+
 		// Quick check to avoid expensive regex
 		if tm.cache != nil && !tm.cache.QuickMatch(tm.triggers[i].ID, line) {
 			continue

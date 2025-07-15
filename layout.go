@@ -105,7 +105,7 @@ func (l *Layout) AddLineToPane(paneID string, line string) {
 		// Keep reasonable history - more aggressive for main pane
 		maxLines := 100
 		if paneID == "main" {
-			maxLines = 500  // Main pane can have more history
+			maxLines = 500 // Main pane can have more history
 		}
 		if len(pane.Content) > maxLines {
 			pane.Content = pane.Content[len(pane.Content)-maxLines:]
@@ -131,7 +131,7 @@ func (l *Layout) SetActivePane(paneID string) {
 func (l *Layout) NextPane() {
 	// Build pane order based on what's visible
 	paneOrder := []string{"main", "room", "hands"}
-	
+
 	// Only include familiar if it has content
 	if familiarPane, ok := l.panes["familiar"]; ok {
 		if len(familiarPane.Content) > 0 && familiarPane.Content[0] != "" {
@@ -155,7 +155,7 @@ func (l *Layout) Render() string {
 
 // RenderWithHeight creates the layout view with a specific height
 func (l *Layout) RenderWithHeight(height int) string {
-	
+
 	// Calculate pane dimensions
 	// Left column (main) takes 70% width
 	leftWidth := int(float64(l.width) * 0.7)
@@ -203,16 +203,16 @@ func (l *Layout) RenderWithHeight(height int) string {
 
 	// Render panes
 	mainView := l.renderPane("main")
-	
+
 	roomView := l.renderPane("room")
-	
+
 	handsView := l.renderPane("hands")
 
 	// Build right column based on what's visible
 	var rightPanes []string
 	rightPanes = append(rightPanes, roomView)
 	rightPanes = append(rightPanes, handsView)
-	
+
 	if hasFamiliar {
 		familiarView := l.renderPane("familiar")
 		rightPanes = append(rightPanes, familiarView)
@@ -273,14 +273,14 @@ func (l *Layout) renderPane(paneID string) string {
 
 	// Apply style with dimensions
 	contentStr := content.String()
-	
+
 	// Pre-trim content to exact height to avoid expensive lipgloss measuring
 	contentLines := strings.Split(contentStr, "\n")
 	if len(contentLines) > pane.Height-2 { // -2 for borders
 		contentLines = contentLines[:pane.Height-2]
 		contentStr = strings.Join(contentLines, "\n")
 	}
-	
+
 	return style.
 		Width(pane.Width).
 		Render(contentStr)
@@ -292,7 +292,7 @@ func (l *Layout) renderRoomContent(pane *Pane, maxLines int) string {
 	if maxLines < 0 {
 		maxLines = 0
 	}
-	
+
 	var lines []string
 
 	// Room content is typically structured
@@ -326,7 +326,7 @@ func (l *Layout) renderHandsContent(pane *Pane, maxLines int) string {
 	if maxLines < 0 {
 		maxLines = 0
 	}
-	
+
 	var lines []string
 
 	for _, line := range pane.Content {
@@ -360,7 +360,7 @@ func (l *Layout) renderFamiliarContent(pane *Pane, maxLines int) string {
 	if maxLines < 0 {
 		maxLines = 0
 	}
-	
+
 	lines := pane.Content
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
@@ -374,7 +374,7 @@ func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
 	if maxLines < 0 {
 		maxLines = 0
 	}
-	
+
 	lines := pane.Content
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
@@ -386,10 +386,10 @@ func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
 func (l *Layout) UpdateFromGameState(state *GameState) {
 	// Debug output
 	if l.debug {
-		fmt.Printf("[DEBUG] UpdateFromGameState - Title: '%s', Desc: '%s', Exits: %v, Objects: %v\n", 
-		    state.Room.Title, state.Room.Description, state.Room.Exits, state.Room.Objects)
+		fmt.Printf("[DEBUG] UpdateFromGameState - Title: '%s', Desc: '%s', Exits: %v, Objects: %v\n",
+			state.Room.Title, state.Room.Description, state.Room.Exits, state.Room.Objects)
 	}
-	
+
 	// Update room pane
 	var roomContent []string
 	if state.Room.Title != "" {

@@ -34,16 +34,16 @@ func NewXMLStreamParser(debug bool) *XMLStreamParser {
 		debug:    debug,
 		handlers: make(map[string]XMLHandler),
 	}
-	
+
 	// Open raw log file once if in debug mode
 	if debug {
 		home, _ := os.UserHomeDir()
 		logDir := filepath.Join(home, ".dr-charm", "logs", "debug")
 		os.MkdirAll(logDir, 0755)
-		
+
 		filename := fmt.Sprintf("raw-xml-%s.log", time.Now().Format("2006-01-02"))
 		logPath := filepath.Join(logDir, filename)
-		
+
 		if rawLog, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
 			p.rawLog = rawLog
 		}
@@ -100,12 +100,12 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 		p.rawLog.Write([]byte("\n=== END CHUNK ===\n"))
 		// Don't close - keep file open
 	}
-	
+
 	// Create a temporary buffer for this chunk
 	tempBuf := bytes.NewBuffer(nil)
 	tempBuf.Write(p.buffer.Bytes()) // Add any leftover from previous chunk
-	tempBuf.Write(data)              // Add new data
-	
+	tempBuf.Write(data)             // Add new data
+
 	// Debug: log raw data for problematic rooms
 	if p.debug && bytes.Contains(data, []byte("Via Iltesh")) {
 		fmt.Printf("[DEBUG] Raw data containing Via Iltesh:\n%s\n", string(data))
@@ -129,7 +129,7 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 		if err != nil {
 			// Get current position in buffer
 			currentPos := decoder.InputOffset()
-			
+
 			// Save unparsed data for next chunk
 			allBytes := tempBuf.Bytes()
 			if currentPos > 0 && int(currentPos) <= len(allBytes) {
@@ -148,7 +148,7 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 			}
 			break
 		}
-		
+
 		// Update last good position after successful token
 		lastGoodPos = decoder.InputOffset()
 
@@ -174,19 +174,19 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 						break
 					}
 				}
-				
+
 				var content string
 				decoder.DecodeElement(&content, &t)
-				
+
 				if p.debug {
 					fmt.Printf("[DEBUG] Found preset tag id='%s', content length=%d\n", id, len(content))
 				}
-				
+
 				// Include preset content in output AND update game state
 				if id == "roomDesc" && content != "" {
 					// Update game state
 					p.state.Room.Description = content
-					
+
 					// Add newline before room description if we have content
 					if output.Len() > 0 {
 						output.WriteString("\n")
@@ -228,15 +228,15 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 	}
 
 	result := output.String()
-	
+
 	if p.debug && !parseStart.IsZero() {
 		elapsed := time.Since(parseStart)
 		if elapsed > 10*time.Millisecond {
-			fmt.Printf("[PERF] XML parsing took %v for %d bytes, output %d chars\n", 
+			fmt.Printf("[PERF] XML parsing took %v for %d bytes, output %d chars\n",
 				elapsed, len(data), len(result))
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -426,7 +426,7 @@ func (p *XMLStreamParser) handleCompass(decoder *xml.Decoder, start xml.StartEle
 	// Only clear exits if we're going to add new ones
 	// Some rooms have empty compass elements but exits in the text
 	foundExits := []string{}
-	
+
 	if p.debug {
 		fmt.Printf("[DEBUG] Parsing compass element\n")
 	}
@@ -487,14 +487,14 @@ func (p *XMLStreamParser) handleComponent(decoder *xml.Decoder, start xml.StartE
 	if id == "room exits" {
 		var exits []string
 		var textContent strings.Builder
-		
+
 		// Parse the content manually to handle nested <d> tags
 		for {
 			token, err := decoder.Token()
 			if err != nil {
 				break
 			}
-			
+
 			switch t := token.(type) {
 			case xml.StartElement:
 				if t.Name.Local == "d" {
@@ -518,7 +518,7 @@ func (p *XMLStreamParser) handleComponent(decoder *xml.Decoder, start xml.StartE
 				}
 			}
 		}
-		
+
 	done:
 		if len(exits) > 0 {
 			state.Room.Exits = exits
@@ -527,7 +527,7 @@ func (p *XMLStreamParser) handleComponent(decoder *xml.Decoder, start xml.StartE
 				fmt.Printf("[DEBUG] Parsed exits from component: %v\n", exits)
 			}
 		}
-		
+
 		return nil
 	}
 
@@ -564,11 +564,11 @@ func (p *XMLStreamParser) handlePreset(decoder *xml.Decoder, start xml.StartElem
 			break
 		}
 	}
-	
+
 	// Get the preset content
 	var content string
 	decoder.DecodeElement(&content, &start)
-	
+
 	// Handle room description preset
 	if id == "roomDesc" && content != "" {
 		state.Room.Description = content
@@ -578,7 +578,7 @@ func (p *XMLStreamParser) handlePreset(decoder *xml.Decoder, start xml.StartElem
 	} else if p.debug && id == "roomDesc" {
 		fmt.Printf("[DEBUG] Empty room description preset\n")
 	}
-	
+
 	return nil
 }
 
