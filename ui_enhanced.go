@@ -39,9 +39,13 @@ type EnhancedModel struct {
 	triggerManager *TriggerManager
 	themeManager   *ThemeManager
 	logger         *Logger
+	perfTracker    *PerformanceTracker
 
 	// Output buffer
 	mainOutput []string
+	
+	// Current event being tracked
+	currentEvent   *EventMetrics
 }
 
 // ViewMode represents different UI modes
@@ -92,7 +96,7 @@ func InitialEnhancedModel(conn net.Conn, api *GameAPI) EnhancedModel {
 		gameState:      gameState,
 		width:          80,
 		height:         24,
-		viewMode:       ViewModeSingle,
+		viewMode:       ViewModeMulti,
 		scrollOffset:   0,
 		autoScroll:     true,
 		mainOutput:     []string{"Connected to DragonRealms"},
@@ -102,6 +106,7 @@ func InitialEnhancedModel(conn net.Conn, api *GameAPI) EnhancedModel {
 		triggerManager: NewTriggerManager(),
 		themeManager:   NewThemeManager(filepath.Join(configDir, "themes")),
 		logger:         NewLogger(filepath.Join(configDir, "logs")),
+		perfTracker:    NewPerformanceTracker(debug),
 	}
 }
 
@@ -110,7 +115,7 @@ func (m EnhancedModel) Init() tea.Cmd {
 	// Start logging
 	m.logger.Start("Cennedig")
 
-	return readEnhancedGameOutput(m.conn, m.xmlParser)
+	return readEnhancedGameOutput(m.conn, m.xmlParser, m.perfTracker)
 }
 
 // Update handles messages
@@ -154,6 +159,9 @@ func (m EnhancedModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlC:
 		m.quitting = true
 		m.logger.Stop()
+		if m.xmlParser != nil {
+			m.xmlParser.Close()
+		}
 		return m, tea.Quit
 
 	case tea.KeyF1:
@@ -178,6 +186,32 @@ func (m EnhancedModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logger.Stop()
 		} else {
 			m.logger.Start("Cennedig")
+		}
+		return m, nil
+	
+	case tea.KeyF5:
+		// Display performance stats
+		if m.perfTracker != nil {
+			stats := m.perfTracker.GetStats()
+			if stats != nil {
+				m.addOutput("\n=== Performance Stats ===")
+				if eventCount, ok := stats["event_count"].(int); ok {
+					m.addOutput(fmt.Sprintf("Events tracked: %d", eventCount))
+				}
+				
+				// Display stage stats
+				stages := []string{"parse", "state", "ui_update", "render", "total"}
+				for _, stage := range stages {
+					if stageStats, ok := stats[stage].(map[string]float64); ok {
+						m.addOutput(fmt.Sprintf("%s: avg=%.1fms p95=%.1fms max=%.1fms",
+							stage,
+							stageStats["avg_ms"],
+							stageStats["p95_ms"],
+							stageStats["max_ms"]))
+					}
+				}
+				m.addOutput("=========================\n")
+			}
 		}
 		return m, nil
 
@@ -277,16 +311,37 @@ func (m EnhancedModel) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleGameMessage processes game output
 func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cmd) {
+	// Start performance tracking for game pane
+	metrics := StartGamePaneMetrics()
+	defer func() {
+		metrics.TotalTime = time.Since(metrics.ParseStart)
+		if s := metrics.String(); s != "" && m.perfTracker != nil && m.perfTracker.debug {
+			fmt.Println(s)
+		}
+	}()
+	
+	// Track current event
+	if msg.event != nil {
+		m.currentEvent = msg.event
+	}
+	
 	// Update game state
+	layoutStart := time.Now()
 	m.gameState = msg.state
 	m.layout.UpdateFromGameState(m.gameState)
+	metrics.LayoutTime = time.Since(layoutStart)
 
 	// Process and display text
 	if msg.text != "" {
 		lines := strings.Split(msg.text, "\n")
+		metrics.LineCount = len(lines)
 		inRoomDesc := false
 		roomDescLines := []string{}
 		
+		// Track if we need to update layout at the end
+		needsLayoutUpdate := false
+		
+		filterStart := time.Now()
 		for _, line := range lines {
 			if line != "" {
 				// Filter out empty "Obvious paths: , , ." lines
@@ -310,9 +365,15 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 					continue
 				}
 				
-				// Apply triggers for highlighting
+				// Apply triggers for highlighting  
+				triggerStart := time.Now()
 				processed := m.triggerManager.ProcessLine(line)
+				metrics.TriggerTime += time.Since(triggerStart)
+				
+				// Add output
+				outputStart := time.Now()
 				m.addOutput(processed)
+				metrics.OutputTime += time.Since(outputStart)
 
 				// Log the output
 				m.logger.LogGameOutput(line)
@@ -345,8 +406,8 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 						// Start capturing room description
 						inRoomDesc = true
 						roomDescLines = []string{}
-						// Update the layout immediately
-						m.layout.UpdateFromGameState(m.gameState)
+						// Mark that we need to update layout
+						needsLayoutUpdate = true
 					}
 				}
 				
@@ -357,14 +418,14 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 						// Save the accumulated description
 						if len(roomDescLines) > 0 {
 							m.gameState.Room.Description = strings.Join(roomDescLines, " ")
-							m.layout.UpdateFromGameState(m.gameState)
+							needsLayoutUpdate = true
 						}
 						inRoomDesc = false
 					} else if strings.HasPrefix(strings.TrimSpace(line), "You also see") {
 						// This is objects, not description, but save any description we have so far
 						if len(roomDescLines) > 0 {
 							m.gameState.Room.Description = strings.Join(roomDescLines, " ")
-							m.layout.UpdateFromGameState(m.gameState)
+							needsLayoutUpdate = true
 						}
 						inRoomDesc = false
 						// Continue to process this line as objects below
@@ -411,11 +472,19 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 								fmt.Printf("[DEBUG] Parsed room objects: %v\n", cleanedObjects)
 							}
 							// Update the layout immediately
-							m.layout.UpdateFromGameState(m.gameState)
+							needsLayoutUpdate = true
 						}
 					}
 				}
 			}
+		}
+		metrics.FilterTime = time.Since(filterStart)
+		
+		// Update layout once at the end if needed
+		if needsLayoutUpdate {
+			layoutStart := time.Now()
+			m.layout.UpdateFromGameState(m.gameState)
+			metrics.LayoutTime += time.Since(layoutStart)
 		}
 	}
 
@@ -424,7 +493,12 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 		m.scrollOffset = 0
 	}
 
-	return m, readEnhancedGameOutput(m.conn, m.xmlParser)
+	// Mark UI update complete
+	if m.currentEvent != nil {
+		m.currentEvent.UIUpdateTime = time.Now()
+	}
+
+	return m, readEnhancedGameOutput(m.conn, m.xmlParser, m.perfTracker)
 }
 
 // handleThemeKeys handles theme selection
@@ -511,32 +585,52 @@ func (m *EnhancedModel) addOutput(line string) {
 	// Update layout main pane
 	m.layout.AddLineToPane("main", line)
 
-	// Keep reasonable buffer
-	if len(m.mainOutput) > 2000 {
-		m.mainOutput = m.mainOutput[len(m.mainOutput)-2000:]
+	// Keep reasonable buffer - reduced from 2000 to prevent performance issues
+	if len(m.mainOutput) > 500 {
+		m.mainOutput = m.mainOutput[len(m.mainOutput)-500:]
 	}
+	
 }
 
 // View renders the UI
 func (m EnhancedModel) View() string {
+	viewStart := time.Now()
+	
+	// Mark render time and complete the event
+	if m.currentEvent != nil {
+		m.currentEvent.RenderTime = time.Now()
+		m.perfTracker.RecordEvent(m.currentEvent)
+		m.currentEvent = nil
+	}
+	
 	if m.quitting {
 		return "Goodbye!\n"
 	}
 
+	var result string
 	switch m.viewMode {
 	case ViewModeHelp:
-		return m.renderHelp()
+		result = m.renderHelp()
 	case ViewModeTheme:
-		return m.renderThemeSelector()
+		result = m.renderThemeSelector()
 	case ViewModeMulti:
-		return m.renderMultiPane()
+		result = m.renderMultiPane()
 	default:
-		return m.renderSinglePane()
+		result = m.renderSinglePane()
 	}
+	
+	// Log total View() time if it's slow
+	elapsed := time.Since(viewStart)
+	if elapsed > 100*time.Millisecond && m.perfTracker != nil && m.perfTracker.debug {
+		fmt.Printf("[RENDER] View() total took %v\n", elapsed)
+	}
+	
+	return result
 }
 
 // renderSinglePane renders the single-pane view
 func (m EnhancedModel) renderSinglePane() string {
+	
 	theme := m.themeManager.GetTheme()
 
 	// Calculate component heights
@@ -569,9 +663,7 @@ func (m EnhancedModel) renderSinglePane() string {
 
 	borderStyle := m.themeManager.CreateBorderStyle()
 	outputStyle := borderStyle.
-		Width(m.width - 2).
-		Height(outputHeight).
-		MaxHeight(outputHeight)
+		Width(m.width - 2)
 
 	inputStyle := borderStyle.
 		Width(m.width - 2)
@@ -582,7 +674,14 @@ func (m EnhancedModel) renderSinglePane() string {
 	output := m.buildOutput(outputHeight - 2)
 	input := m.buildInput()
 
-	// Combine components
+	// Style rendering
+	// Pre-process output to ensure it's not too large
+	outputLines := strings.Split(output, "\n")
+	if len(outputLines) > outputHeight {
+		outputLines = outputLines[len(outputLines)-outputHeight:]
+		output = strings.Join(outputLines, "\n")
+	}
+	
 	components := []string{
 		titleStyle.Render(title),
 		statusStyle.Render(statusBar),
@@ -601,6 +700,7 @@ func (m EnhancedModel) renderSinglePane() string {
 
 // renderMultiPane renders the multi-pane layout
 func (m EnhancedModel) renderMultiPane() string {
+	
 	theme := m.themeManager.GetTheme()
 	
 	// Calculate component heights
@@ -639,7 +739,9 @@ func (m EnhancedModel) renderMultiPane() string {
 	// Build content
 	title := m.buildTitle()
 	statusBar := m.buildStatusBar()
+	
 	layoutContent := m.layout.RenderWithHeight(layoutHeight)
+	
 	input := m.buildInput()
 	
 	// Wrap layout content to ensure it doesn't exceed allocated height
@@ -672,9 +774,10 @@ func (m EnhancedModel) renderHelp() string {
 
 KEYBOARD SHORTCUTS:
   F1          - Show this help
-  F2          - Toggle single/multi-pane view
+  F2          - Toggle multi/single-pane view
   F3          - Theme selector
   F4          - Toggle logging
+  F5          - Show performance stats
   Tab         - Cycle through panes (multi-pane mode)
   
   PgUp/PgDn   - Scroll output
@@ -849,6 +952,7 @@ func (m EnhancedModel) buildStatusBar() string {
 }
 
 func (m EnhancedModel) buildOutput(maxLines int) string {
+	
 	theme := m.themeManager.GetTheme()
 
 	// Calculate visible lines
@@ -867,6 +971,12 @@ func (m EnhancedModel) buildOutput(maxLines int) string {
 	}
 	if endIdx > totalLines {
 		endIdx = totalLines
+	}
+	
+	// Debug what we're rendering
+	renderLines := endIdx - startIdx
+	if m.perfTracker != nil && m.perfTracker.debug {
+		fmt.Printf("[RENDER] buildOutput: rendering %d of %d total lines\n", renderLines, totalLines)
 	}
 
 	var output strings.Builder
@@ -893,30 +1003,52 @@ func (m EnhancedModel) buildInput() string {
 	return "> " + m.input
 }
 
+// getStanceName returns the human-readable stance name
+func getStanceName(stance int) string {
+	stances := []string{"Prone", "Sitting", "Kneeling", "Standing", "Hiding"}
+	if stance >= 0 && stance < len(stances) {
+		return stances[stance]
+	}
+	return fmt.Sprintf("%d", stance)
+}
+
 // Message types
 type enhancedGameMsg struct {
 	text  string
 	state *GameState
+	event *EventMetrics
 }
 
+type errMsg error
+
 // readEnhancedGameOutput reads and parses game output
-func readEnhancedGameOutput(conn net.Conn, parser *XMLStreamParser) tea.Cmd {
+func readEnhancedGameOutput(conn net.Conn, parser *XMLStreamParser, perfTracker *PerformanceTracker) tea.Cmd {
 	return func() tea.Msg {
+		// Start tracking this event
+		event := perfTracker.StartEvent()
+		
 		buf := make([]byte, 4096)
 		n, err := conn.Read(buf)
 		if err != nil {
 			return errMsg(err)
 		}
 
+		// Mark parse start
 		text, err := parser.ParseChunk(buf[:n])
+		event.ParseEndTime = time.Now()
+		
 		if err != nil {
 			// Log parsing errors but don't fail
 			text = string(buf[:n])
 		}
 
+		// State is already updated by parser
+		event.StateUpdTime = time.Now()
+
 		return enhancedGameMsg{
 			text:  text,
 			state: parser.GetState(),
+			event: event,
 		}
 	}
 }

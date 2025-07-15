@@ -37,6 +37,7 @@ type Trigger struct {
 type TriggerManager struct {
 	triggers []Trigger
 	aliases  map[string]string
+	cache    *TriggerCache
 }
 
 // NewTriggerManager creates a new trigger manager
@@ -49,6 +50,9 @@ func NewTriggerManager() *TriggerManager {
 	// Add some default triggers for common DragonRealms events
 	tm.AddDefaultTriggers()
 	tm.AddDefaultAliases()
+	
+	// Build trigger cache for performance
+	tm.cache = BuildTriggerCache(tm.triggers)
 
 	return tm
 }
@@ -199,6 +203,11 @@ func (tm *TriggerManager) RemoveTrigger(id string) {
 
 // ProcessLine applies triggers to a line of text and returns styled text
 func (tm *TriggerManager) ProcessLine(line string) string {
+	// Quick exit for empty lines
+	if line == "" {
+		return line
+	}
+	
 	// Track all matches and their positions
 	type match struct {
 		start, end int
@@ -207,13 +216,18 @@ func (tm *TriggerManager) ProcessLine(line string) string {
 
 	var matches []match
 
-	// Find all trigger matches
+	// Find all trigger matches using cache for optimization
 	for i := range tm.triggers {
 		if !tm.triggers[i].Enabled {
 			continue
 		}
 
 		if tm.triggers[i].Regex == nil {
+			continue
+		}
+		
+		// Quick check to avoid expensive regex
+		if tm.cache != nil && !tm.cache.QuickMatch(tm.triggers[i].ID, line) {
 			continue
 		}
 

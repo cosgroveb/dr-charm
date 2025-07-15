@@ -13,7 +13,8 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 - Automatic "look" command on connection
 
 ### UI Features ✅
-- **Single and Multi-pane layouts** - Toggle with F2
+- **Multi-pane layout (default)** - Separate windows for game, room, hands, and familiar
+- **Single-pane mode** - Toggle with F2 for a simplified view
 - **Scrollback buffer** - Page Up/Down, Home/End navigation
 - **Status bar** - Health, mana, stamina, concentration, spirit
 - **Room tracking** - Current room name in title bar
@@ -36,15 +37,11 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 
 ## Usage
 
-### Standard UI (default)
 ```bash
 ./dr-charm
 ```
 
-### Enhanced UI with multi-pane support
-```bash
-DR_CHARM_ENHANCED=true ./dr-charm
-```
+The client starts with the enhanced multi-pane UI by default. Press F2 to toggle to single-pane mode.
 
 The client uses hardcoded credentials in `main.go`:
 - Account: cosgroveb4
@@ -65,11 +62,12 @@ go build -o dr-charm .
 - **Backspace** - Delete character
 - **Ctrl+C** - Quit
 
-### Enhanced UI Only
+### Navigation
 - **F1** - Show help
-- **F2** - Toggle single/multi-pane view
+- **F2** - Toggle multi/single-pane view
 - **F3** - Theme selector
 - **F4** - Toggle logging
+- **F5** - Show performance stats
 - **Tab** - Cycle through panes (multi-pane mode)
 
 ### Scrolling

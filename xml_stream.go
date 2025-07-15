@@ -21,6 +21,7 @@ type XMLStreamParser struct {
 	streamText strings.Builder
 	handlers   map[string]XMLHandler
 	debug      bool
+	rawLog     *os.File // Keep file open instead of opening/closing each time
 }
 
 // XMLHandler processes specific XML elements
@@ -32,6 +33,20 @@ func NewXMLStreamParser(debug bool) *XMLStreamParser {
 		state:    &GameState{},
 		debug:    debug,
 		handlers: make(map[string]XMLHandler),
+	}
+	
+	// Open raw log file once if in debug mode
+	if debug {
+		home, _ := os.UserHomeDir()
+		logDir := filepath.Join(home, ".dr-charm", "logs", "debug")
+		os.MkdirAll(logDir, 0755)
+		
+		filename := fmt.Sprintf("raw-xml-%s.log", time.Now().Format("2006-01-02"))
+		logPath := filepath.Join(logDir, filename)
+		
+		if rawLog, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+			p.rawLog = rawLog
+		}
 	}
 
 	// Register handlers for different XML elements
@@ -74,27 +89,16 @@ func NewXMLStreamParser(debug bool) *XMLStreamParser {
 
 // ParseChunk processes a chunk of XML data
 func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
-	// Log raw XML data to file when debug is enabled
+	var parseStart time.Time
 	if p.debug {
-		// Use the same directory as session logs
-		home, _ := os.UserHomeDir()
-		logDir := filepath.Join(home, ".dr-charm", "logs")
-		os.MkdirAll(logDir, 0755)
-		
-		// Create a debug subdirectory for raw XML logs
-		debugDir := filepath.Join(logDir, "debug")
-		os.MkdirAll(debugDir, 0755)
-		
-		// Use current date for the filename
-		filename := fmt.Sprintf("raw-xml-%s.log", time.Now().Format("2006-01-02"))
-		logPath := filepath.Join(debugDir, filename)
-		
-		if rawLog, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
-			rawLog.Write([]byte("\n=== NEW CHUNK ===\n"))
-			rawLog.Write(data)
-			rawLog.Write([]byte("\n=== END CHUNK ===\n"))
-			rawLog.Close()
-		}
+		parseStart = time.Now()
+	}
+	// Log raw XML data to file when debug is enabled
+	if p.debug && p.rawLog != nil {
+		p.rawLog.Write([]byte("\n=== NEW CHUNK ===\n"))
+		p.rawLog.Write(data)
+		p.rawLog.Write([]byte("\n=== END CHUNK ===\n"))
+		// Don't close - keep file open
 	}
 	
 	// Create a temporary buffer for this chunk
@@ -223,7 +227,17 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 		}
 	}
 
-	return output.String(), nil
+	result := output.String()
+	
+	if p.debug && !parseStart.IsZero() {
+		elapsed := time.Since(parseStart)
+		if elapsed > 10*time.Millisecond {
+			fmt.Printf("[PERF] XML parsing took %v for %d bytes, output %d chars\n", 
+				elapsed, len(data), len(result))
+		}
+	}
+	
+	return result, nil
 }
 
 // Handler implementations
@@ -634,4 +648,12 @@ func (p *XMLStreamParser) handleSkipElement(decoder *xml.Decoder, start xml.Star
 // GetState returns the current game state
 func (p *XMLStreamParser) GetState() *GameState {
 	return p.state
+}
+
+// Close closes any open resources
+func (p *XMLStreamParser) Close() {
+	if p.rawLog != nil {
+		p.rawLog.Close()
+		p.rawLog = nil
+	}
 }

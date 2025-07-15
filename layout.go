@@ -102,9 +102,13 @@ func (l *Layout) UpdatePane(paneID string, content []string) {
 func (l *Layout) AddLineToPane(paneID string, line string) {
 	if pane, ok := l.panes[paneID]; ok {
 		pane.Content = append(pane.Content, line)
-		// Keep reasonable history
-		if len(pane.Content) > 100 {
-			pane.Content = pane.Content[len(pane.Content)-100:]
+		// Keep reasonable history - more aggressive for main pane
+		maxLines := 100
+		if paneID == "main" {
+			maxLines = 500  // Main pane can have more history
+		}
+		if len(pane.Content) > maxLines {
+			pane.Content = pane.Content[len(pane.Content)-maxLines:]
 		}
 	}
 }
@@ -125,7 +129,15 @@ func (l *Layout) SetActivePane(paneID string) {
 
 // NextPane cycles to the next pane
 func (l *Layout) NextPane() {
-	paneOrder := []string{"main", "room", "hands", "familiar"}
+	// Build pane order based on what's visible
+	paneOrder := []string{"main", "room", "hands"}
+	
+	// Only include familiar if it has content
+	if familiarPane, ok := l.panes["familiar"]; ok {
+		if len(familiarPane.Content) > 0 && familiarPane.Content[0] != "" {
+			paneOrder = append(paneOrder, "familiar")
+		}
+	}
 
 	for i, id := range paneOrder {
 		if id == l.activePane {
@@ -143,15 +155,30 @@ func (l *Layout) Render() string {
 
 // RenderWithHeight creates the layout view with a specific height
 func (l *Layout) RenderWithHeight(height int) string {
+	
 	// Calculate pane dimensions
 	// Left column (main) takes 70% width
 	leftWidth := int(float64(l.width) * 0.7)
 	rightWidth := l.width - leftWidth - 1 // -1 for gap
 
-	// Heights for right column panes
-	roomHeight := int(float64(height) * 0.3)
-	handsHeight := int(float64(height) * 0.2)
-	familiarHeight := height - roomHeight - handsHeight - 2 // -2 for gaps
+	// Check if familiar pane has content
+	hasFamiliar := false
+	if familiarPane, ok := l.panes["familiar"]; ok {
+		hasFamiliar = len(familiarPane.Content) > 0 && familiarPane.Content[0] != ""
+	}
+
+	// Heights for right column panes - adjust based on whether familiar is shown
+	var roomHeight, handsHeight, familiarHeight int
+	if hasFamiliar {
+		roomHeight = int(float64(height) * 0.3)
+		handsHeight = int(float64(height) * 0.2)
+		familiarHeight = height - roomHeight - handsHeight - 2 // -2 for gaps
+	} else {
+		// Without familiar pane, give more space to room and hands
+		roomHeight = int(float64(height) * 0.5)
+		handsHeight = height - roomHeight - 1 // -1 for gap
+		familiarHeight = 0
+	}
 
 	// Update pane dimensions
 	if mainPane, ok := l.panes["main"]; ok {
@@ -169,29 +196,37 @@ func (l *Layout) RenderWithHeight(height int) string {
 		handsPane.Height = handsHeight
 	}
 
-	if familiarPane, ok := l.panes["familiar"]; ok {
+	if familiarPane, ok := l.panes["familiar"]; ok && hasFamiliar {
 		familiarPane.Width = rightWidth
 		familiarPane.Height = familiarHeight
 	}
 
 	// Render panes
 	mainView := l.renderPane("main")
+	
 	roomView := l.renderPane("room")
+	
 	handsView := l.renderPane("hands")
-	familiarView := l.renderPane("familiar")
+
+	// Build right column based on what's visible
+	var rightPanes []string
+	rightPanes = append(rightPanes, roomView)
+	rightPanes = append(rightPanes, handsView)
+	
+	if hasFamiliar {
+		familiarView := l.renderPane("familiar")
+		rightPanes = append(rightPanes, familiarView)
+	}
 
 	// Combine right column
-	rightColumn := lipgloss.JoinVertical(lipgloss.Left,
-		roomView,
-		handsView,
-		familiarView,
-	)
+	rightColumn := lipgloss.JoinVertical(lipgloss.Left, rightPanes...)
 
 	// Combine columns
-	return lipgloss.JoinHorizontal(lipgloss.Top,
+	result := lipgloss.JoinHorizontal(lipgloss.Top,
 		mainView,
 		rightColumn,
 	)
+	return result
 }
 
 // renderPane renders a single pane
@@ -237,14 +272,27 @@ func (l *Layout) renderPane(paneID string) string {
 	}
 
 	// Apply style with dimensions
+	contentStr := content.String()
+	
+	// Pre-trim content to exact height to avoid expensive lipgloss measuring
+	contentLines := strings.Split(contentStr, "\n")
+	if len(contentLines) > pane.Height-2 { // -2 for borders
+		contentLines = contentLines[:pane.Height-2]
+		contentStr = strings.Join(contentLines, "\n")
+	}
+	
 	return style.
 		Width(pane.Width).
-		Height(pane.Height).
-		Render(content.String())
+		Render(contentStr)
 }
 
 // renderRoomContent renders the room pane content
 func (l *Layout) renderRoomContent(pane *Pane, maxLines int) string {
+	// Ensure maxLines is at least 0
+	if maxLines < 0 {
+		maxLines = 0
+	}
+	
 	var lines []string
 
 	// Room content is typically structured
@@ -265,7 +313,7 @@ func (l *Layout) renderRoomContent(pane *Pane, maxLines int) string {
 	}
 
 	// Trim to fit
-	if len(lines) > maxLines {
+	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
 
@@ -274,6 +322,11 @@ func (l *Layout) renderRoomContent(pane *Pane, maxLines int) string {
 
 // renderHandsContent renders the hands pane content
 func (l *Layout) renderHandsContent(pane *Pane, maxLines int) string {
+	// Ensure maxLines is at least 0
+	if maxLines < 0 {
+		maxLines = 0
+	}
+	
 	var lines []string
 
 	for _, line := range pane.Content {
@@ -294,7 +347,7 @@ func (l *Layout) renderHandsContent(pane *Pane, maxLines int) string {
 		}
 	}
 
-	if len(lines) > maxLines {
+	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
 
@@ -303,8 +356,13 @@ func (l *Layout) renderHandsContent(pane *Pane, maxLines int) string {
 
 // renderFamiliarContent renders the familiar pane content
 func (l *Layout) renderFamiliarContent(pane *Pane, maxLines int) string {
+	// Ensure maxLines is at least 0
+	if maxLines < 0 {
+		maxLines = 0
+	}
+	
 	lines := pane.Content
-	if len(lines) > maxLines {
+	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
 	return strings.Join(lines, "\n")
@@ -312,8 +370,13 @@ func (l *Layout) renderFamiliarContent(pane *Pane, maxLines int) string {
 
 // renderGenericContent renders generic pane content
 func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
+	// Ensure maxLines is at least 0
+	if maxLines < 0 {
+		maxLines = 0
+	}
+	
 	lines := pane.Content
-	if len(lines) > maxLines {
+	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
 	return strings.Join(lines, "\n")

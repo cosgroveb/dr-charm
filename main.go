@@ -250,19 +250,19 @@ func main() {
 	}()
 
 	fmt.Println("API server starting on http://localhost:8080")
+	
+	// Check for CLI mode
+	if os.Getenv("DR_CHARM_CLI") == "true" {
+		fmt.Println("Running in CLI mode for testing...")
+		RunCLIMode(gameConn, api)
+		return
+	}
+	
 	fmt.Println("Launching UI...")
 
-	// Start Bubble Tea UI
-	// Use environment variable to switch between standard and enhanced UI
-	useEnhanced := os.Getenv("DR_CHARM_ENHANCED") == "true"
-
-	var p *tea.Program
-	if useEnhanced {
-		fmt.Println("Starting enhanced UI with multi-pane support...")
-		p = tea.NewProgram(InitialEnhancedModel(gameConn, api), tea.WithAltScreen())
-	} else {
-		p = tea.NewProgram(InitialModelV2(gameConn, api), tea.WithAltScreen())
-	}
+	// Start Bubble Tea UI - Enhanced UI is now the default
+	fmt.Println("Starting enhanced UI with multi-pane support...")
+	p := tea.NewProgram(InitialEnhancedModel(gameConn, api), tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		panic(fmt.Sprintf("Failed to start UI: %v", err))
