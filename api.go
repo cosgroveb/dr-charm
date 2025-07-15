@@ -42,8 +42,9 @@ type CommandResponse struct {
 
 // OutputResponse represents game output
 type OutputResponse struct {
-	Lines  []OutputLine `json:"lines"`
-	LastID uint64       `json:"last_id"`
+	Lines  []string `json:"lines"`
+	LastID uint64   `json:"last_id"`
+	Count  int      `json:"count"`
 }
 
 // HealthResponse represents API health status
@@ -141,11 +142,13 @@ func (api *GameAPI) handleOutput(w http.ResponseWriter, r *http.Request) {
 	api.mu.RLock()
 	defer api.mu.RUnlock()
 
-	var lines []OutputLine
+	var lines []string
+	count := 0
 	api.outputBuffer.Do(func(v interface{}) {
 		if v != nil {
 			if line, ok := v.(OutputLine); ok && line.ID > sinceID {
-				lines = append(lines, line)
+				lines = append(lines, line.Text)
+				count++
 			}
 		}
 	})
@@ -153,6 +156,7 @@ func (api *GameAPI) handleOutput(w http.ResponseWriter, r *http.Request) {
 	resp := OutputResponse{
 		Lines:  lines,
 		LastID: api.lastID.Load(),
+		Count:  count,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -117,7 +117,25 @@ curl -X POST http://localhost:8080/command \
 curl http://localhost:8080/output
 ```
 
-See [API.md](API.md) for full documentation.
+### CLI Client
+
+A command-line client is provided for easier interaction with the API:
+
+```bash
+# Interactive mode
+./drcli
+
+# Send single command
+./drcli -c "look"
+
+# Watch game output
+./drcli -w
+
+# See more options
+./drcli -h
+```
+
+See [API.md](API.md) for full API documentation and [cmd/drcli/README.md](cmd/drcli/README.md) for CLI usage.
 
 ## Configuration
 
