@@ -65,7 +65,13 @@ func InitialEnhancedModel(conn net.Conn, api *GameAPI) EnhancedModel {
 	os.MkdirAll(filepath.Join(configDir, "themes"), 0755)
 
 	// Initialize systems
-	xmlParser := NewXMLStreamParser(false)
+	debug := os.Getenv("DR_CHARM_DEBUG") == "true"
+	if debug {
+		home, _ := os.UserHomeDir()
+		debugPath := filepath.Join(home, ".dr-charm", "logs", "debug", fmt.Sprintf("raw-xml-%s.log", time.Now().Format("2006-01-02")))
+		fmt.Printf("DEBUG mode enabled - raw XML will be logged to %s\n", debugPath)
+	}
+	xmlParser := NewXMLStreamParser(debug)
 	gameState := xmlParser.GetState()
 
 	// Set initial game state
@@ -92,7 +98,7 @@ func InitialEnhancedModel(conn net.Conn, api *GameAPI) EnhancedModel {
 		mainOutput:     []string{"Connected to DragonRealms"},
 		history:        []string{},
 		xmlParser:      xmlParser,
-		layout:         NewLayout(80, 24),
+		layout:         NewLayout(80, 24, debug),
 		triggerManager: NewTriggerManager(),
 		themeManager:   NewThemeManager(filepath.Join(configDir, "themes")),
 		logger:         NewLogger(filepath.Join(configDir, "logs")),
@@ -116,7 +122,13 @@ func (m EnhancedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.layout.Resize(msg.Width, msg.Height)
+		// Calculate available height for layout (accounting for UI elements)
+		// titleHeight(1) + statusHeight(1) + inputHeight(3) + gaps(2) = 7
+		layoutHeight := msg.Height - 7
+		if layoutHeight < 10 {
+			layoutHeight = 10
+		}
+		m.layout.Resize(msg.Width, layoutHeight)
 		return m, nil
 
 	case enhancedGameMsg:
@@ -272,8 +284,32 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 	// Process and display text
 	if msg.text != "" {
 		lines := strings.Split(msg.text, "\n")
+		inRoomDesc := false
+		roomDescLines := []string{}
+		
 		for _, line := range lines {
 			if line != "" {
+				// Filter out empty "Obvious paths: , , ." lines
+				if strings.Contains(line, "Obvious paths:") {
+					// Check if it only contains commas, spaces, and periods after the colon
+					parts := strings.SplitN(line, ":", 2)
+					if len(parts) == 2 {
+						exits := strings.TrimSpace(parts[1])
+						// Remove all commas, spaces, and periods
+						cleaned := strings.Trim(exits, ", .")
+						if cleaned == "" {
+							continue
+						}
+					}
+				}
+				
+				// Filter out XML fragments that leaked through
+				if strings.Contains(line, "='") || strings.Contains(line, "=\"") ||
+					strings.Contains(line, "/>") || strings.Contains(line, "</") ||
+					(strings.Contains(line, "<") && strings.Contains(line, ">")) {
+					continue
+				}
+				
 				// Apply triggers for highlighting
 				processed := m.triggerManager.ProcessLine(line)
 				m.addOutput(processed)
@@ -287,6 +323,97 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 						time.Sleep(500 * time.Millisecond)
 						m.conn.Write([]byte("look\n"))
 					}()
+				}
+				
+				// Check for room name in square brackets at the start of a line
+				if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+					roomName := strings.TrimPrefix(strings.TrimSuffix(line, "]"), "[")
+					// Make sure it's not a system message (those usually have more text)
+					if !strings.Contains(roomName, "login") && !strings.Contains(roomName, "You are") &&
+					   !strings.Contains(roomName, "You are standing") {
+						// Only update if it's a different room
+						if m.gameState.Room.Title != roomName {
+							m.gameState.Room.Title = roomName
+							if m.xmlParser.debug {
+								fmt.Printf("[DEBUG] Set room title: %s\n", roomName)
+								fmt.Printf("[DEBUG] Current room desc: %s\n", m.gameState.Room.Description)
+							}
+							// Clear room data when entering a NEW room
+							m.gameState.Room.Objects = []string{}
+							m.gameState.Room.Description = ""
+						}
+						// Start capturing room description
+						inRoomDesc = true
+						roomDescLines = []string{}
+						// Update the layout immediately
+						m.layout.UpdateFromGameState(m.gameState)
+					}
+				}
+				
+				// Capture room description lines
+				if inRoomDesc {
+					// Stop capturing when we hit "Obvious paths:"
+					if strings.Contains(line, "Obvious paths:") {
+						// Save the accumulated description
+						if len(roomDescLines) > 0 {
+							m.gameState.Room.Description = strings.Join(roomDescLines, " ")
+							m.layout.UpdateFromGameState(m.gameState)
+						}
+						inRoomDesc = false
+					} else if strings.HasPrefix(strings.TrimSpace(line), "You also see") {
+						// This is objects, not description, but save any description we have so far
+						if len(roomDescLines) > 0 {
+							m.gameState.Room.Description = strings.Join(roomDescLines, " ")
+							m.layout.UpdateFromGameState(m.gameState)
+						}
+						inRoomDesc = false
+						// Continue to process this line as objects below
+					} else if !strings.HasPrefix(line, "[") && !strings.HasPrefix(line, "Also here:") {
+						// Add to room description (skip the room name line and "Also here:" lines)
+						trimmed := strings.TrimSpace(line)
+						if trimmed != "" && trimmed != "[You are standing up.]" {
+							roomDescLines = append(roomDescLines, trimmed)
+						}
+					}
+				}
+				
+				// Check for "You also see" lines
+				trimmedLine := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmedLine, "You also see") {
+					// Extract objects from the line
+					parts := strings.SplitN(trimmedLine, "see", 2)
+					if len(parts) == 2 {
+						objectsText := strings.TrimSpace(parts[1])
+						// Remove trailing period
+						objectsText = strings.TrimSuffix(objectsText, ".")
+						// Split by "and" and commas
+						objectsText = strings.ReplaceAll(objectsText, " and ", ", ")
+						objects := strings.Split(objectsText, ", ")
+						
+						// Clean up and add objects
+						var cleanedObjects []string
+						for _, obj := range objects {
+							obj = strings.TrimSpace(obj)
+							if obj != "" {
+								// Handle "a" and "an" articles
+								if strings.HasPrefix(obj, "a ") {
+									obj = strings.TrimPrefix(obj, "a ")
+								} else if strings.HasPrefix(obj, "an ") {
+									obj = strings.TrimPrefix(obj, "an ")
+								}
+								cleanedObjects = append(cleanedObjects, obj)
+							}
+						}
+						
+						if len(cleanedObjects) > 0 {
+							m.gameState.Room.Objects = cleanedObjects
+							if m.xmlParser.debug {
+								fmt.Printf("[DEBUG] Parsed room objects: %v\n", cleanedObjects)
+							}
+							// Update the layout immediately
+							m.layout.UpdateFromGameState(m.gameState)
+						}
+					}
 				}
 			}
 		}
@@ -474,8 +601,67 @@ func (m EnhancedModel) renderSinglePane() string {
 
 // renderMultiPane renders the multi-pane layout
 func (m EnhancedModel) renderMultiPane() string {
-	// Use the layout system
-	return m.layout.Render()
+	theme := m.themeManager.GetTheme()
+	
+	// Calculate component heights
+	titleHeight := 1
+	statusHeight := 1
+	inputHeight := 3
+	errorHeight := 0
+	if m.err != nil {
+		errorHeight = 2
+	}
+	
+	// Reserve space for fixed UI elements
+	totalFixedHeight := titleHeight + statusHeight + inputHeight + errorHeight + 2
+	layoutHeight := m.height - totalFixedHeight
+	if layoutHeight < 10 {
+		layoutHeight = 10
+	}
+	
+	// Create styles
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color(theme.Colors.TitleBar)).
+		Align(lipgloss.Center).
+		Width(m.width)
+	
+	statusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Colors.StatusBar)).
+		Background(lipgloss.Color(theme.Colors.StatusBarBg)).
+		Padding(0, 1).
+		Width(m.width)
+	
+	borderStyle := m.themeManager.CreateBorderStyle()
+	inputStyle := borderStyle.
+		Width(m.width - 2)
+	
+	// Build content
+	title := m.buildTitle()
+	statusBar := m.buildStatusBar()
+	layoutContent := m.layout.RenderWithHeight(layoutHeight)
+	input := m.buildInput()
+	
+	// Wrap layout content to ensure it doesn't exceed allocated height
+	layoutStyle := lipgloss.NewStyle().
+		MaxHeight(layoutHeight).
+		Height(layoutHeight)
+	
+	// Combine components
+	components := []string{
+		titleStyle.Render(title),
+		statusStyle.Render(statusBar),
+		layoutStyle.Render(layoutContent),
+		inputStyle.Render(input),
+	}
+	
+	result := strings.Join(components, "\n")
+	
+	if m.err != nil {
+		result += "\n\nError: " + m.err.Error()
+	}
+	
+	return result
 }
 
 // renderHelp renders the help screen
@@ -552,12 +738,12 @@ func (m EnhancedModel) renderThemeSelector() string {
 func (m EnhancedModel) buildTitle() string {
 	title := "DragonRealms"
 	if m.gameState.Room.Title != "" {
-		title = fmt.Sprintf("DragonRealms - %s", m.gameState.Room.Title)
+		title = fmt.Sprintf("DragonRealms [%s]", m.gameState.Room.Title)
 	}
 
-	// Add logging indicator
+	// Add logging indicator if enabled (small indicator at the end)
 	if m.logger.IsEnabled() {
-		title += " [LOG]"
+		title += " •"
 	}
 
 	return title

@@ -5,8 +5,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // XMLStreamParser handles streaming XML parsing for DragonRealms protocol
@@ -48,36 +51,102 @@ func NewXMLStreamParser(debug bool) *XMLStreamParser {
 	p.handlers["compass"] = p.handleCompass
 	p.handlers["component"] = p.handleComponent
 	p.handlers["indicator"] = p.handleIndicator
+	// Don't register preset as a handler - we need to handle it specially for text output
+	// p.handlers["preset"] = p.handlePreset
+	p.handlers["openDialog"] = p.handleSkipElement
+	p.handlers["closeDialog"] = p.handleSkipElement
+	p.handlers["exposeDialog"] = p.handleSkipElement
+	p.handlers["logData"] = p.handleSkipElement
+	p.handlers["exp"] = p.handleSkipElement
+	p.handlers["dir"] = p.handleSkipElement
+	p.handlers["style"] = p.handleSkipElement
+	p.handlers["pushBold"] = p.handleSkipElement
+	p.handlers["popBold"] = p.handleSkipElement
+	p.handlers["output"] = p.handleSkipElement
+	p.handlers["cmdPrompt"] = p.handleSkipElement
+	p.handlers["compDef"] = p.handleSkipElement
+	p.handlers["inv"] = p.handleSkipElement
+	p.handlers["clearContainer"] = p.handleSkipElement
+	p.handlers["mode"] = p.handleSkipElement
 
 	return p
 }
 
 // ParseChunk processes a chunk of XML data
 func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
-	p.buffer.Write(data)
+	// Log raw XML data to file when debug is enabled
+	if p.debug {
+		// Use the same directory as session logs
+		home, _ := os.UserHomeDir()
+		logDir := filepath.Join(home, ".dr-charm", "logs")
+		os.MkdirAll(logDir, 0755)
+		
+		// Create a debug subdirectory for raw XML logs
+		debugDir := filepath.Join(logDir, "debug")
+		os.MkdirAll(debugDir, 0755)
+		
+		// Use current date for the filename
+		filename := fmt.Sprintf("raw-xml-%s.log", time.Now().Format("2006-01-02"))
+		logPath := filepath.Join(debugDir, filename)
+		
+		if rawLog, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+			rawLog.Write([]byte("\n=== NEW CHUNK ===\n"))
+			rawLog.Write(data)
+			rawLog.Write([]byte("\n=== END CHUNK ===\n"))
+			rawLog.Close()
+		}
+	}
+	
+	// Create a temporary buffer for this chunk
+	tempBuf := bytes.NewBuffer(nil)
+	tempBuf.Write(p.buffer.Bytes()) // Add any leftover from previous chunk
+	tempBuf.Write(data)              // Add new data
+	
+	// Debug: log raw data for problematic rooms
+	if p.debug && bytes.Contains(data, []byte("Via Iltesh")) {
+		fmt.Printf("[DEBUG] Raw data containing Via Iltesh:\n%s\n", string(data))
+	}
 
-	decoder := xml.NewDecoder(&p.buffer)
+	decoder := xml.NewDecoder(tempBuf)
 	decoder.Strict = false
 	decoder.AutoClose = xml.HTMLAutoClose
 	decoder.Entity = xml.HTMLEntity
 
 	var output strings.Builder
+	lastGoodPos := int64(0)
 
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
+			// Clear the buffer - we processed everything
+			p.buffer.Reset()
 			break
 		}
 		if err != nil {
-			// Handle partial XML by keeping unparsed data in buffer
-			remaining := decoder.InputOffset()
-			if remaining > 0 {
-				parsed := p.buffer.Next(int(remaining))
+			// Get current position in buffer
+			currentPos := decoder.InputOffset()
+			
+			// Save unparsed data for next chunk
+			allBytes := tempBuf.Bytes()
+			if currentPos > 0 && int(currentPos) <= len(allBytes) {
+				// We made some progress, save from current position
+				remaining := allBytes[currentPos:]
 				p.buffer.Reset()
-				p.buffer.Write(parsed[remaining:])
+				p.buffer.Write(remaining)
+			} else if int(lastGoodPos) < len(allBytes) {
+				// No progress made, save everything from last good position
+				remaining := allBytes[lastGoodPos:]
+				p.buffer.Reset()
+				p.buffer.Write(remaining)
+			} else {
+				// Can't determine good position, clear buffer
+				p.buffer.Reset()
 			}
 			break
 		}
+		
+		// Update last good position after successful token
+		lastGoodPos = decoder.InputOffset()
 
 		switch t := token.(type) {
 		case xml.StartElement:
@@ -85,6 +154,47 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 				if err := handler(decoder, t, p.state); err != nil && p.debug {
 					fmt.Printf("[DEBUG] Error handling %s: %v\n", t.Name.Local, err)
 				}
+			} else if t.Name.Local == "d" {
+				// Special handling for <d> direction tags - include their content in output
+				var direction string
+				decoder.DecodeElement(&direction, &t)
+				if direction != "" {
+					output.WriteString(direction)
+				}
+			} else if t.Name.Local == "preset" {
+				// Handle preset tags (like room descriptions) - include in output
+				var id string
+				for _, attr := range t.Attr {
+					if attr.Name.Local == "id" {
+						id = attr.Value
+						break
+					}
+				}
+				
+				var content string
+				decoder.DecodeElement(&content, &t)
+				
+				if p.debug {
+					fmt.Printf("[DEBUG] Found preset tag id='%s', content length=%d\n", id, len(content))
+				}
+				
+				// Include preset content in output AND update game state
+				if id == "roomDesc" && content != "" {
+					// Update game state
+					p.state.Room.Description = content
+					
+					// Add newline before room description if we have content
+					if output.Len() > 0 {
+						output.WriteString("\n")
+					}
+					output.WriteString(content)
+					if p.debug {
+						fmt.Printf("[DEBUG] Added room description to output and state\n")
+					}
+				}
+			} else if t.Name.Local == "pushBold" || t.Name.Local == "popBold" {
+				// Skip bold formatting tags
+				decoder.Skip()
 			} else {
 				// Skip unknown elements
 				decoder.Skip()
@@ -94,8 +204,16 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 			text := string(t)
 			if p.inStream {
 				p.streamText.WriteString(text)
-			} else if strings.TrimSpace(text) != "" {
-				output.WriteString(text)
+			} else if text != "" {
+				// Skip pure whitespace but preserve spaces within text
+				trimmed := strings.TrimSpace(text)
+				if trimmed != "" {
+					// Filter out text that looks like XML attributes or fragments
+					if !strings.Contains(trimmed, "='") && !strings.Contains(trimmed, "=\"") &&
+						!strings.HasSuffix(trimmed, ">") && !strings.HasPrefix(trimmed, "<") {
+						output.WriteString(text) // Use original text to preserve formatting
+					}
+				}
 			}
 
 		case xml.EndElement:
@@ -177,6 +295,9 @@ func (p *XMLStreamParser) handleStreamWindow(decoder *xml.Decoder, start xml.Sta
 
 	if windowID == "main" && strings.HasPrefix(subtitle, " - ") {
 		state.Room.Title = subtitle[3:]
+		if p.debug {
+			fmt.Printf("[DEBUG] Set room title from streamwindow: %s\n", state.Room.Title)
+		}
 	}
 
 	decoder.Skip()
@@ -184,7 +305,9 @@ func (p *XMLStreamParser) handleStreamWindow(decoder *xml.Decoder, start xml.Sta
 }
 
 func (p *XMLStreamParser) handleDialogData(decoder *xml.Decoder, start xml.StartElement, state *GameState) error {
-	// DialogData contains child elements, don't skip
+	// DialogData is a container element, we need to skip it after processing
+	// to prevent its content from being treated as text
+	decoder.Skip()
 	return nil
 }
 
@@ -286,12 +409,21 @@ func (p *XMLStreamParser) handleRoom(decoder *xml.Decoder, start xml.StartElemen
 }
 
 func (p *XMLStreamParser) handleCompass(decoder *xml.Decoder, start xml.StartElement, state *GameState) error {
-	state.Room.Exits = []string{}
+	// Only clear exits if we're going to add new ones
+	// Some rooms have empty compass elements but exits in the text
+	foundExits := []string{}
+	
+	if p.debug {
+		fmt.Printf("[DEBUG] Parsing compass element\n")
+	}
 
 	// Parse compass directions
 	for {
 		token, err := decoder.Token()
 		if err != nil {
+			if p.debug {
+				fmt.Printf("[DEBUG] Error in compass parsing: %v\n", err)
+			}
 			break
 		}
 
@@ -299,13 +431,27 @@ func (p *XMLStreamParser) handleCompass(decoder *xml.Decoder, start xml.StartEle
 		case xml.StartElement:
 			if t.Name.Local == "dir" {
 				for _, attr := range t.Attr {
-					if attr.Name.Local == "value" && attr.Value != "" {
-						state.Room.Exits = append(state.Room.Exits, attr.Value)
+					if attr.Name.Local == "value" {
+						if p.debug {
+							fmt.Printf("[DEBUG] Found dir with value: '%s' (empty: %v)\n", attr.Value, attr.Value == "")
+						}
+						if attr.Value != "" {
+							foundExits = append(foundExits, attr.Value)
+						}
 					}
 				}
 			}
 		case xml.EndElement:
 			if t.Name.Local == "compass" {
+				// Only update exits if we found any in the compass element
+				if len(foundExits) > 0 {
+					state.Room.Exits = foundExits
+					if p.debug {
+						fmt.Printf("[DEBUG] Compass parsing complete. Found exits: %v\n", foundExits)
+					}
+				} else if p.debug {
+					fmt.Printf("[DEBUG] Compass parsing complete. No exits found, keeping existing.\n")
+				}
 				return nil
 			}
 		}
@@ -323,21 +469,102 @@ func (p *XMLStreamParser) handleComponent(decoder *xml.Decoder, start xml.StartE
 		}
 	}
 
+	// For room exits, we need to parse the nested XML content
+	if id == "room exits" {
+		var exits []string
+		var textContent strings.Builder
+		
+		// Parse the content manually to handle nested <d> tags
+		for {
+			token, err := decoder.Token()
+			if err != nil {
+				break
+			}
+			
+			switch t := token.(type) {
+			case xml.StartElement:
+				if t.Name.Local == "d" {
+					// Found a direction tag, extract its content
+					var direction string
+					decoder.DecodeElement(&direction, &t)
+					if direction != "" {
+						exits = append(exits, direction)
+					}
+				} else if t.Name.Local == "compass" {
+					// Skip the compass element, it's handled separately
+					decoder.Skip()
+				}
+			case xml.CharData:
+				// Collect text content
+				textContent.WriteString(string(t))
+			case xml.EndElement:
+				if t.Name.Local == "component" {
+					// We've reached the end
+					goto done
+				}
+			}
+		}
+		
+	done:
+		if len(exits) > 0 {
+			state.Room.Exits = exits
+			state.Room.ExitsString = strings.Join(exits, ", ")
+			if p.debug {
+				fmt.Printf("[DEBUG] Parsed exits from component: %v\n", exits)
+			}
+		}
+		
+		return nil
+	}
+
+	// For other components, use the standard decode
 	var content string
 	decoder.DecodeElement(&content, &start)
 
 	switch id {
 	case "room objs":
+		// Clean up bold tags before parsing
+		content = strings.ReplaceAll(content, "<pushBold/>", "")
+		content = strings.ReplaceAll(content, "<popBold/>", "")
 		state.Room.Objects = parseRoomList(content)
 	case "room players":
+		// Clean up bold tags before parsing
+		content = strings.ReplaceAll(content, "<pushBold/>", "")
+		content = strings.ReplaceAll(content, "<popBold/>", "")
 		state.Room.Players = parseRoomList(content)
-	case "room exits":
-		exits := strings.TrimSpace(content)
-		if exits != "" {
-			state.Room.ExitsString = exits
+	case "room desc":
+		// Sometimes room description comes in component too
+		if content != "" {
+			state.Room.Description = content
 		}
 	}
 
+	return nil
+}
+
+func (p *XMLStreamParser) handlePreset(decoder *xml.Decoder, start xml.StartElement, state *GameState) error {
+	var id string
+	for _, attr := range start.Attr {
+		if attr.Name.Local == "id" {
+			id = attr.Value
+			break
+		}
+	}
+	
+	// Get the preset content
+	var content string
+	decoder.DecodeElement(&content, &start)
+	
+	// Handle room description preset
+	if id == "roomDesc" && content != "" {
+		state.Room.Description = content
+		if p.debug {
+			fmt.Printf("[DEBUG] Set room description from preset: %s\n", content)
+		}
+	} else if p.debug && id == "roomDesc" {
+		fmt.Printf("[DEBUG] Empty room description preset\n")
+	}
+	
 	return nil
 }
 
@@ -396,6 +623,12 @@ func parseRoomList(content string) []string {
 	}
 
 	return items
+}
+
+// handleSkipElement is a generic handler for elements we want to skip
+func (p *XMLStreamParser) handleSkipElement(decoder *xml.Decoder, start xml.StartElement, state *GameState) error {
+	decoder.Skip()
+	return nil
 }
 
 // GetState returns the current game state

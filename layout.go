@@ -25,14 +25,16 @@ type Layout struct {
 	height      int
 	activePane  string
 	borderStyle lipgloss.Style
+	debug       bool
 }
 
 // NewLayout creates a new layout manager
-func NewLayout(width, height int) *Layout {
+func NewLayout(width, height int, debug bool) *Layout {
 	l := &Layout{
 		panes:  make(map[string]*Pane),
 		width:  width,
 		height: height,
+		debug:  debug,
 		borderStyle: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("62")),
@@ -136,20 +138,25 @@ func (l *Layout) NextPane() {
 
 // Render creates the full layout view
 func (l *Layout) Render() string {
+	return l.RenderWithHeight(l.height)
+}
+
+// RenderWithHeight creates the layout view with a specific height
+func (l *Layout) RenderWithHeight(height int) string {
 	// Calculate pane dimensions
 	// Left column (main) takes 70% width
 	leftWidth := int(float64(l.width) * 0.7)
 	rightWidth := l.width - leftWidth - 1 // -1 for gap
 
 	// Heights for right column panes
-	roomHeight := int(float64(l.height) * 0.3)
-	handsHeight := int(float64(l.height) * 0.2)
-	familiarHeight := l.height - roomHeight - handsHeight - 2 // -2 for gaps
+	roomHeight := int(float64(height) * 0.3)
+	handsHeight := int(float64(height) * 0.2)
+	familiarHeight := height - roomHeight - handsHeight - 2 // -2 for gaps
 
 	// Update pane dimensions
 	if mainPane, ok := l.panes["main"]; ok {
 		mainPane.Width = leftWidth
-		mainPane.Height = l.height
+		mainPane.Height = height
 	}
 
 	if roomPane, ok := l.panes["room"]; ok {
@@ -314,6 +321,12 @@ func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
 
 // UpdateFromGameState updates panes based on game state
 func (l *Layout) UpdateFromGameState(state *GameState) {
+	// Debug output
+	if l.debug {
+		fmt.Printf("[DEBUG] UpdateFromGameState - Title: '%s', Desc: '%s', Exits: %v, Objects: %v\n", 
+		    state.Room.Title, state.Room.Description, state.Room.Exits, state.Room.Objects)
+	}
+	
 	// Update room pane
 	var roomContent []string
 	if state.Room.Title != "" {
@@ -321,13 +334,28 @@ func (l *Layout) UpdateFromGameState(state *GameState) {
 		roomContent = append(roomContent, "")
 	}
 	if state.Room.Description != "" {
-		roomContent = append(roomContent, state.Room.Description)
+		// Split long descriptions into paragraphs for better readability
+		desc := strings.TrimSpace(state.Room.Description)
+		roomContent = append(roomContent, desc)
 		roomContent = append(roomContent, "")
 	}
 	if state.Room.ExitsString != "" {
-		roomContent = append(roomContent, "Exits: "+state.Room.ExitsString)
+		// Clean up the exits string - remove empty entries
+		exits := strings.TrimSpace(state.Room.ExitsString)
+		if exits != "" && exits != "." && exits != ", , ." {
+			roomContent = append(roomContent, "Exits: "+exits)
+		}
 	} else if len(state.Room.Exits) > 0 {
-		roomContent = append(roomContent, "Exits: "+strings.Join(state.Room.Exits, ", "))
+		// Filter out empty exits
+		var validExits []string
+		for _, exit := range state.Room.Exits {
+			if exit != "" {
+				validExits = append(validExits, exit)
+			}
+		}
+		if len(validExits) > 0 {
+			roomContent = append(roomContent, "Exits: "+strings.Join(validExits, ", "))
+		}
 	}
 	if len(state.Room.Objects) > 0 {
 		roomContent = append(roomContent, "")
@@ -343,6 +371,10 @@ func (l *Layout) UpdateFromGameState(state *GameState) {
 			roomContent = append(roomContent, "  "+player)
 		}
 	}
+	// fmt.Printf("[DEBUG] Updating room pane with %d lines\n", len(roomContent))
+	// if len(roomContent) > 0 {
+	//     fmt.Printf("[DEBUG] First line: %s\n", roomContent[0])
+	// }
 	l.UpdatePane("room", roomContent)
 
 	// Update hands pane
