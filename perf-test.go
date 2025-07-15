@@ -43,7 +43,7 @@ func RunPerfTest() {
 		`<progressBar id="stamina" value="70" />`,
 	}
 
-	fmt.Println("\nRunning performance test with sample data...\n")
+	fmt.Println("\nRunning performance test with sample data...")
 
 	// Process each chunk and measure performance
 	for i, data := range testData {

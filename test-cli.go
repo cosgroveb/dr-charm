@@ -13,7 +13,7 @@ import (
 func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 	fmt.Println("\n=== CLI Mode - Performance Testing ===")
 	fmt.Println("Commands: 'quit' to exit, 'stats' for performance stats")
-	fmt.Println("Press Enter to send commands to the game\n")
+	fmt.Println("Press Enter to send commands to the game")
 
 	// Create performance tracker
 	debug := os.Getenv("DR_CHARM_DEBUG") == "true"
