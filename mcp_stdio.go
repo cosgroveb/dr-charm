@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // MCPStdioServer handles Model Context Protocol over stdio with IPC to main process
@@ -22,10 +23,22 @@ type MCPStdioServer struct {
 
 // NewMCPStdioServer creates a new MCP stdio server that connects to main process via IPC
 func NewMCPStdioServer(ipcSocket string) (*MCPStdioServer, error) {
-	// Connect to the main process via Unix socket
-	conn, err := net.Dial("unix", ipcSocket)
+	// Connect to the main process via Unix socket with retries
+	var conn net.Conn
+	var err error
+	
+	for i := 0; i < 10; i++ {
+		conn, err = net.Dial("unix", ipcSocket)
+		if err == nil {
+			break
+		}
+		if i < 9 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to IPC socket: %w", err)
+		return nil, fmt.Errorf("failed to connect to IPC socket after retries: %w", err)
 	}
 	
 	return &MCPStdioServer{
@@ -96,6 +109,25 @@ func (s *MCPStdioServer) handleRequest(req MCPRequest) {
 	resp.ID = req.ID
 	
 	switch req.Method {
+	case "initialize":
+		// Handle initialization request
+		resp.Result = map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities": map[string]interface{}{
+				"tools": map[string]interface{}{},
+			},
+			"serverInfo": map[string]interface{}{
+				"name": "dr-charm-mcp",
+				"version": "1.0.0",
+			},
+		}
+		s.sendResponse(resp)
+		
+	case "notifications/initialized":
+		// Client has acknowledged initialization
+		log.Println("MCP client initialized")
+		return // No response needed for notifications
+		
 	case "tools/list":
 		// Return list of available tools
 		resp.Result = s.getToolsList()
@@ -218,6 +250,9 @@ func (s *MCPStdioServer) receiveIPCEvents() {
 func (s *MCPStdioServer) sendResponse(resp MCPResponse) {
 	s.outputMutex.Lock()
 	defer s.outputMutex.Unlock()
+	
+	// Ensure JSON-RPC version is set
+	resp.JSONRPC = "2.0"
 	
 	if err := s.output.Encode(&resp); err != nil {
 		log.Printf("Failed to encode response: %v", err)

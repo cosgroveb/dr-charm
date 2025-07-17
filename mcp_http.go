@@ -111,6 +111,24 @@ func (s *MCPHTTPServer) processRequest(req MCPRequest) MCPResponse {
 	resp.ID = req.ID
 	
 	switch req.Method {
+	case "initialize":
+		// Handle initialization request
+		resp.Result = map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities": map[string]interface{}{
+				"tools": map[string]interface{}{},
+			},
+			"serverInfo": map[string]interface{}{
+				"name": "dr-charm-mcp",
+				"version": "1.0.0",
+			},
+		}
+		
+	case "notifications/initialized":
+		// Client has acknowledged initialization
+		log.Println("MCP client initialized")
+		return resp // Return empty response for notifications
+		
 	case "tools/list":
 		// Return list of available tools
 		resp.Result = s.getToolsList()
@@ -148,13 +166,15 @@ func (s *MCPHTTPServer) processRequest(req MCPRequest) MCPResponse {
 		}
 	}
 	
+	resp.JSONRPC = "2.0"
 	return resp
 }
 
 // sendErrorResponse sends an error response
 func (s *MCPHTTPServer) sendErrorResponse(w http.ResponseWriter, id interface{}, code int, message string) {
 	resp := MCPResponse{
-		ID: id,
+		JSONRPC: "2.0",
+		ID:      id,
 		Error: &MCPError{
 			Code:    code,
 			Message: message,

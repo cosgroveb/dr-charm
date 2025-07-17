@@ -55,6 +55,12 @@ func (s *MCPIPCServer) Start() error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 	
+	// Start accepting IPC connection before launching child
+	go s.acceptConnection()
+	
+	// Give the listener a moment to start
+	time.Sleep(100 * time.Millisecond)
+	
 	// Launch MCP stdio server as child process
 	s.childProcess = exec.Command(exePath, "--mcp-stdio-child", s.socketPath)
 	s.childProcess.Stderr = os.Stderr // Pass through stderr for logging
@@ -77,17 +83,17 @@ func (s *MCPIPCServer) Start() error {
 	
 	log.Printf("Started MCP stdio child process (PID: %d)", s.childProcess.Process.Pid)
 	
-	// Start accepting IPC connection
-	go s.acceptConnection()
-	
 	// Start event forwarder
 	go s.forwardEvents()
 	
 	// Clean up when process exits
 	go func() {
 		s.childProcess.Wait()
-		close(s.done)
-		s.cleanup()
+		// Signal done but don't close the channel yet
+		select {
+		case s.done <- true:
+		default:
+		}
 	}()
 	
 	// Log that pipes are connected for Claude

@@ -22,16 +22,18 @@ type MCPServer struct {
 
 // MCPRequest represents a JSON-RPC request
 type MCPRequest struct {
-	ID     interface{}            `json:"id"`
-	Method string                 `json:"method"`
-	Params map[string]interface{} `json:"params,omitempty"`
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      interface{}            `json:"id"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
 }
 
 // MCPResponse represents a JSON-RPC response
 type MCPResponse struct {
-	ID     interface{} `json:"id"`
-	Result interface{} `json:"result,omitempty"`
-	Error  *MCPError   `json:"error,omitempty"`
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *MCPError   `json:"error,omitempty"`
 }
 
 // MCPError represents a JSON-RPC error
@@ -146,6 +148,28 @@ func (s *MCPServer) handleRequest(req MCPRequest) {
 	resp.ID = req.ID
 	
 	switch req.Method {
+	case "initialize":
+		// Handle initialization request
+		resp.Result = map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"capabilities": map[string]interface{}{
+				"tools": map[string]interface{}{},
+			},
+			"serverInfo": map[string]interface{}{
+				"name": "dr-charm-mcp",
+				"version": "1.0.0",
+			},
+		}
+		
+	case "notifications/initialized":
+		// Client has acknowledged initialization
+		if s.standalone {
+			fmt.Fprintf(os.Stderr, "MCP client initialized\n")
+		} else {
+			log.Println("MCP client initialized")
+		}
+		return // No response needed for notifications
+		
 	case "tools/list":
 		// Return list of available tools
 		resp.Result = s.getToolsList()
@@ -184,6 +208,7 @@ func (s *MCPServer) handleRequest(req MCPRequest) {
 	}
 	
 	// Send response
+	resp.JSONRPC = "2.0"
 	s.outputMutex.Lock()
 	if err := s.output.Encode(&resp); err != nil {
 		if s.standalone {
