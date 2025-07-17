@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"regexp"
@@ -23,6 +24,7 @@ const (
 func main() {
 	// Parse command line flags
 	mcpMode := flag.Bool("mcp", false, "Enable MCP server mode")
+	mcpPort := flag.Int("mcp-port", 8080, "Port for MCP HTTP server")
 	mcpStandalone := flag.Bool("mcp-standalone", false, "Run MCP server without UI (for Claude integration)")
 	flag.Parse()
 
@@ -270,10 +272,20 @@ func main() {
 		return
 	}
 	
-	// Start MCP server in background if requested (with UI)
+	// Start MCP HTTP server in background if requested (with UI)
 	if *mcpMode {
-		fmt.Println("MCP mode with UI is not yet supported. Use --mcp-standalone for Claude integration.")
-		return
+		fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpPort)
+		mcpServer := NewMCPHTTPServer(gameClient, *mcpPort)
+		
+		// Connect MCP event channel to game client
+		gameClient.SetMCPEventChannel(mcpServer.GetEventChannel())
+		
+		// Run MCP server in background
+		go func() {
+			if err := mcpServer.Start(); err != nil {
+				log.Printf("MCP HTTP server error: %v", err)
+			}
+		}()
 	}
 
 	// Check for CLI mode
