@@ -17,6 +17,7 @@ type MCPServer struct {
 	outputMutex sync.Mutex
 	eventChan   chan *SocialEvent
 	done        chan bool
+	standalone  bool // true when running without UI
 }
 
 // MCPRequest represents a JSON-RPC request
@@ -57,12 +58,24 @@ func NewMCPServer(gameClient *GameClient) *MCPServer {
 		output:     json.NewEncoder(os.Stdout),
 		eventChan:  make(chan *SocialEvent, 100),
 		done:       make(chan bool),
+		standalone: false,
 	}
+}
+
+// SetStandalone sets whether the MCP server is running without UI
+func (s *MCPServer) SetStandalone(standalone bool) {
+	s.standalone = standalone
 }
 
 // Start begins the MCP server operation
 func (s *MCPServer) Start() {
-	log.Println("MCP server started")
+	if s.standalone {
+		// Use stderr for logging in standalone mode
+		log.SetOutput(os.Stderr)
+		fmt.Fprintf(os.Stderr, "MCP server started in standalone mode\n")
+	} else {
+		log.Println("MCP server started")
+	}
 	
 	// Start event pump in background
 	go s.eventPump()
@@ -72,21 +85,37 @@ func (s *MCPServer) Start() {
 		var req MCPRequest
 		if err := s.input.Decode(&req); err != nil {
 			if err == io.EOF {
-				log.Println("MCP client disconnected")
+				if s.standalone {
+					fmt.Fprintf(os.Stderr, "MCP client disconnected\n")
+				} else {
+					log.Println("MCP client disconnected")
+				}
 			} else {
-				log.Printf("Failed to decode request: %v", err)
+				if s.standalone {
+					fmt.Fprintf(os.Stderr, "Failed to decode request: %v\n", err)
+				} else {
+					log.Printf("Failed to decode request: %v", err)
+				}
 			}
 			break
 		}
 		
-		log.Printf("Received request: method=%s id=%v", req.Method, req.ID)
+		if s.standalone {
+			fmt.Fprintf(os.Stderr, "Received request: method=%s id=%v\n", req.Method, req.ID)
+		} else {
+			log.Printf("Received request: method=%s id=%v", req.Method, req.ID)
+		}
 		
 		// Handle the request
 		s.handleRequest(req)
 	}
 	
 	close(s.done)
-	fmt.Println("MCP server shutting down")
+	if s.standalone {
+		fmt.Fprintf(os.Stderr, "MCP server shutting down\n")
+	} else {
+		fmt.Println("MCP server shutting down")
+	}
 }
 
 // eventPump handles incoming social events
@@ -94,7 +123,11 @@ func (s *MCPServer) eventPump() {
 	for {
 		select {
 		case event := <-s.eventChan:
-			log.Printf("MCP received social event: %s from %s", event.Subtype, event.From)
+			if s.standalone {
+				fmt.Fprintf(os.Stderr, "MCP received social event: %s from %s\n", event.Subtype, event.From)
+			} else {
+				log.Printf("MCP received social event: %s from %s", event.Subtype, event.From)
+			}
 			// In Phase 2 we'll send these to subscribed clients
 		case <-s.done:
 			return
@@ -153,7 +186,11 @@ func (s *MCPServer) handleRequest(req MCPRequest) {
 	// Send response
 	s.outputMutex.Lock()
 	if err := s.output.Encode(&resp); err != nil {
-		log.Printf("Failed to encode response: %v", err)
+		if s.standalone {
+			fmt.Fprintf(os.Stderr, "Failed to encode response: %v\n", err)
+		} else {
+			log.Printf("Failed to encode response: %v", err)
+		}
 	}
 	s.outputMutex.Unlock()
 }

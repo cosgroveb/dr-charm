@@ -23,11 +23,15 @@ const (
 func main() {
 	// Parse command line flags
 	mcpMode := flag.Bool("mcp", false, "Enable MCP server mode")
+	mcpStandalone := flag.Bool("mcp-standalone", false, "Run MCP server without UI (for Claude integration)")
 	flag.Parse()
 
 	// Check environment variable too
 	if !*mcpMode && os.Getenv("DR_CHARM_MCP") == "true" {
 		*mcpMode = true
+	}
+	if !*mcpStandalone && os.Getenv("DR_CHARM_MCP_STANDALONE") == "true" {
+		*mcpStandalone = true
 	}
 
 	fmt.Println("DragonRealms Authentication Test")
@@ -252,15 +256,23 @@ func main() {
 	// Create game client
 	gameClient := NewGameClient(gameConn, character)
 
-	// Check for MCP mode first
-	if *mcpMode {
-		fmt.Println("Starting MCP server...")
+	// Check for standalone MCP mode (no UI)
+	if *mcpStandalone {
+		fmt.Fprintln(os.Stderr, "Starting MCP server in standalone mode...")
 		mcpServer := NewMCPServer(gameClient)
+		mcpServer.SetStandalone(true)
 		
 		// Connect MCP event channel to game client
 		gameClient.SetMCPEventChannel(mcpServer.GetEventChannel())
 		
+		// Run MCP server and block
 		mcpServer.Start()
+		return
+	}
+	
+	// Start MCP server in background if requested (with UI)
+	if *mcpMode {
+		fmt.Println("MCP mode with UI is not yet supported. Use --mcp-standalone for Claude integration.")
 		return
 	}
 
