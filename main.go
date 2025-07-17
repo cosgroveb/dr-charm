@@ -239,22 +239,13 @@ func main() {
 
 	fmt.Println("\n=== Connected to DragonRealms ===")
 
-	// Create API instance
-	api := NewGameAPI(gameConn, character, 1000) // 1000 line buffer
-
-	// Start API server in background
-	go func() {
-		if err := StartAPIServer(api, ":8080"); err != nil {
-			fmt.Printf("API server error: %v\n", err)
-		}
-	}()
-
-	fmt.Println("API server starting on http://localhost:8080")
+	// Create game client
+	gameClient := NewGameClient(gameConn, character)
 
 	// Check for CLI mode
 	if os.Getenv("DR_CHARM_CLI") == "true" {
 		fmt.Println("Running in CLI mode for testing...")
-		RunCLIMode(gameConn, api)
+		RunCLIMode(gameConn, gameClient)
 		return
 	}
 
@@ -262,7 +253,7 @@ func main() {
 
 	// Start Bubble Tea UI - Enhanced UI is now the default
 	fmt.Println("Starting enhanced UI with multi-pane support...")
-	p := tea.NewProgram(InitialEnhancedModel(gameConn, api), tea.WithAltScreen())
+	p := tea.NewProgram(InitialEnhancedModel(gameConn, gameClient), tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		panic(fmt.Sprintf("Failed to start UI: %v", err))

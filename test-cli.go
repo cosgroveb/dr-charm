@@ -10,7 +10,7 @@ import (
 )
 
 // Simple CLI mode for testing performance
-func RunCLIMode(gameConn net.Conn, api *GameAPI) {
+func RunCLIMode(gameConn net.Conn, api *GameClient) {
 	fmt.Println("\n=== CLI Mode - Performance Testing ===")
 	fmt.Println("Commands: 'quit' to exit, 'stats' for performance stats")
 	fmt.Println("Press Enter to send commands to the game")
