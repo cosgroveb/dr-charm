@@ -17,6 +17,8 @@ type GameClient struct {
 	lastID       atomic.Uint64
 	connected    atomic.Bool
 	character    string
+	socialBuffer *SocialEventBuffer
+	mcpEventChan chan<- *SocialEvent // Channel to send events to MCP server
 }
 
 // OutputLine represents a line of game output with metadata
@@ -32,6 +34,7 @@ func NewGameClient(gameConn net.Conn, character string) *GameClient {
 		gameConn:     gameConn,
 		outputBuffer: ring.New(1000), // Default buffer size
 		character:    character,
+		socialBuffer: NewSocialEventBuffer(1000), // 1000 social events
 	}
 	client.connected.Store(true)
 	return client
@@ -87,4 +90,30 @@ func (gc *GameClient) GetConnection() net.Conn {
 // GetCharacter returns the character name
 func (gc *GameClient) GetCharacter() string {
 	return gc.character
+}
+
+// GetSocialBuffer returns the social event buffer
+func (gc *GameClient) GetSocialBuffer() *SocialEventBuffer {
+	return gc.socialBuffer
+}
+
+// SetMCPEventChannel sets the channel for sending events to MCP
+func (gc *GameClient) SetMCPEventChannel(ch chan<- *SocialEvent) {
+	gc.mcpEventChan = ch
+}
+
+// AddSocialEvent adds a social event to the buffer and sends to MCP if connected
+func (gc *GameClient) AddSocialEvent(event *SocialEvent) {
+	// Add to buffer
+	gc.socialBuffer.Add(event)
+	
+	// Send to MCP if channel is set
+	if gc.mcpEventChan != nil {
+		select {
+		case gc.mcpEventChan <- event:
+			// Sent successfully
+		default:
+			// Channel full or closed, skip
+		}
+	}
 }

@@ -76,6 +76,7 @@ func InitialEnhancedModel(conn net.Conn, api *GameClient) EnhancedModel {
 		fmt.Printf("DEBUG mode enabled - raw XML will be logged to %s\n", debugPath)
 	}
 	xmlParser := NewXMLStreamParser(debug)
+	xmlParser.SetGameClient(api)
 	gameState := xmlParser.GetState()
 
 	// Set initial game state

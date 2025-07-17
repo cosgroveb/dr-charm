@@ -19,6 +19,7 @@ func RunCLIMode(gameConn net.Conn, api *GameClient) {
 	debug := os.Getenv("DR_CHARM_DEBUG") == "true"
 	perfTracker := NewPerformanceTracker(debug)
 	xmlParser := NewXMLStreamParser(debug)
+	xmlParser.SetGameClient(api)
 	defer xmlParser.Close()
 
 	// Start reading from game

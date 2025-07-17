@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -20,6 +21,15 @@ const (
 )
 
 func main() {
+	// Parse command line flags
+	mcpMode := flag.Bool("mcp", false, "Enable MCP server mode")
+	flag.Parse()
+
+	// Check environment variable too
+	if !*mcpMode && os.Getenv("DR_CHARM_MCP") == "true" {
+		*mcpMode = true
+	}
+
 	fmt.Println("DragonRealms Authentication Test")
 	fmt.Println("================================")
 
@@ -241,6 +251,18 @@ func main() {
 
 	// Create game client
 	gameClient := NewGameClient(gameConn, character)
+
+	// Check for MCP mode first
+	if *mcpMode {
+		fmt.Println("Starting MCP server...")
+		mcpServer := NewMCPServer(gameClient)
+		
+		// Connect MCP event channel to game client
+		gameClient.SetMCPEventChannel(mcpServer.GetEventChannel())
+		
+		mcpServer.Start()
+		return
+	}
 
 	// Check for CLI mode
 	if os.Getenv("DR_CHARM_CLI") == "true" {
