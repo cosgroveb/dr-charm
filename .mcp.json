@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dragonrealms": {
+      "command": "/Users/bcosgrove/code/dr-charm/dr-charm",
+      "args": ["--mcp"]
+    }
+  }
+}

@@ -9,11 +9,9 @@ import (
 	"sync"
 )
 
-// MCPHTTPServer handles Model Context Protocol over HTTP
+// MCPHTTPServer handles Model Context Protocol over HTTP for commands
 type MCPHTTPServer struct {
 	gameClient  *GameClient
-	eventChan   chan *SocialEvent
-	done        chan bool
 	port        int
 	server      *http.Server
 	outputMutex sync.Mutex
@@ -23,8 +21,6 @@ type MCPHTTPServer struct {
 func NewMCPHTTPServer(gameClient *GameClient, port int) *MCPHTTPServer {
 	return &MCPHTTPServer{
 		gameClient: gameClient,
-		eventChan:  make(chan *SocialEvent, 100),
-		done:       make(chan bool),
 		port:       port,
 	}
 }
@@ -47,8 +43,6 @@ func (s *MCPHTTPServer) Start() error {
 		Handler: mux,
 	}
 	
-	// Start event pump in background
-	go s.eventPump()
 	
 	log.Printf("MCP HTTP server starting on port %d", s.port)
 	return s.server.ListenAndServe()
@@ -56,7 +50,6 @@ func (s *MCPHTTPServer) Start() error {
 
 // Stop gracefully shuts down the server
 func (s *MCPHTTPServer) Stop() error {
-	close(s.done)
 	if s.server != nil {
 		return s.server.Close()
 	}
@@ -333,20 +326,3 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 	}
 }
 
-// eventPump handles incoming social events
-func (s *MCPHTTPServer) eventPump() {
-	for {
-		select {
-		case event := <-s.eventChan:
-			log.Printf("MCP HTTP received social event: %s from %s", event.Subtype, event.From)
-			// In Phase 2 we'll send these to subscribed clients via SSE or WebSocket
-		case <-s.done:
-			return
-		}
-	}
-}
-
-// GetEventChannel returns the channel for sending events to MCP
-func (s *MCPHTTPServer) GetEventChannel() chan<- *SocialEvent {
-	return s.eventChan
-}
