@@ -1,35 +1,31 @@
-.PHONY: all build clean fmt test drcli dr-charm
+.PHONY: all build clean fmt test dr-charm
 
 # Default target
 all: build
 
-# Build all binaries
-build: dr-charm drcli
+# Build the dr-charm binary
+build: dr-charm
 
 # Build the main dr-charm client
 dr-charm:
 	go build -o dr-charm .
 
-# Build the CLI tool
-drcli:
-	go build -o drcli ./cmd/drcli
 
 # Format code
 fmt:
 	go fmt ./...
 
-# Run tests
+# Run tests via dagger
 test:
-	go test ./...
+	dagger call test --source .
 
 # Clean build artifacts
 clean:
-	rm -f dr-charm drcli
+	rm -f dr-charm
 
-# Install both tools
+# Install dr-charm
 install: build
 	go install .
-	go install ./cmd/drcli
 
 # Run with debug mode
 debug:
