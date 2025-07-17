@@ -22,9 +22,16 @@ const (
 )
 
 func main() {
+	// Check if running as MCP stdio child process
+	if len(os.Args) > 1 && os.Args[1] == "--mcp-stdio-child" {
+		RunMCPStdioServer()
+		return
+	}
+	
 	// Parse command line flags
 	mcpMode := flag.Bool("mcp", false, "Enable MCP server mode")
 	mcpPort := flag.Int("mcp-port", 8080, "Port for MCP HTTP server")
+	mcpHTTP := flag.Bool("mcp-http", false, "Use HTTP transport for MCP (default: stdio)")
 	mcpStandalone := flag.Bool("mcp-standalone", false, "Run MCP server without UI (for Claude integration)")
 	flag.Parse()
 
@@ -272,20 +279,41 @@ func main() {
 		return
 	}
 	
-	// Start MCP HTTP server in background if requested (with UI)
+	// Start MCP server in background if requested (with UI)
 	if *mcpMode {
-		fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpPort)
-		mcpServer := NewMCPHTTPServer(gameClient, *mcpPort)
-		
-		// Connect MCP event channel to game client
-		gameClient.SetMCPEventChannel(mcpServer.GetEventChannel())
-		
-		// Run MCP server in background
-		go func() {
-			if err := mcpServer.Start(); err != nil {
-				log.Printf("MCP HTTP server error: %v", err)
+		if *mcpHTTP {
+			// HTTP transport
+			fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpPort)
+			mcpServer := NewMCPHTTPServer(gameClient, *mcpPort)
+			
+			// Connect MCP event channel to game client
+			gameClient.SetMCPEventChannel(mcpServer.GetEventChannel())
+			
+			// Run MCP server in background
+			go func() {
+				if err := mcpServer.Start(); err != nil {
+					log.Printf("MCP HTTP server error: %v", err)
+				}
+			}()
+		} else {
+			// Stdio transport with IPC
+			fmt.Println("Starting MCP stdio server with IPC...")
+			mcpIPCServer, err := NewMCPIPCServer(gameClient)
+			if err != nil {
+				log.Fatalf("Failed to create MCP IPC server: %v", err)
 			}
-		}()
+			
+			// Connect MCP event channel to game client
+			gameClient.SetMCPEventChannel(mcpIPCServer.GetEventChannel())
+			
+			// Start IPC server and child process
+			if err := mcpIPCServer.Start(); err != nil {
+				log.Fatalf("Failed to start MCP IPC server: %v", err)
+			}
+			
+			// Ensure cleanup on exit
+			defer mcpIPCServer.Stop()
+		}
 	}
 
 	// Check for CLI mode
