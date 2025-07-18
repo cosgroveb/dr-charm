@@ -23,7 +23,6 @@ const (
 
 func main() {
 	// Parse command line flags
-	mcpStdio := flag.Bool("mcp", false, "Enable MCP stdio server (for Claude Code integration)")
 	mcpHTTP := flag.Bool("mcp-http", false, "Enable MCP HTTP server for commands")
 	mcpHTTPPort := flag.Int("mcp-http-port", 8080, "Port for MCP HTTP server")
 	mcpSSE := flag.Bool("mcp-sse", false, "Enable MCP SSE server for events")
@@ -31,9 +30,6 @@ func main() {
 	flag.Parse()
 
 	// Check environment variables too
-	if !*mcpStdio && os.Getenv("DR_CHARM_MCP") == "true" {
-		*mcpStdio = true
-	}
 	if !*mcpHTTP && os.Getenv("DR_CHARM_MCP_HTTP") == "true" {
 		*mcpHTTP = true
 	}
@@ -262,14 +258,6 @@ func main() {
 
 	// Create game client
 	gameClient := NewGameClient(gameConn, character)
-
-	// Start MCP stdio server if requested (blocks UI)
-	if *mcpStdio {
-		fmt.Fprintln(os.Stderr, "Starting MCP stdio server...")
-		mcpServer := NewMCPStdioServer()
-		mcpServer.Start(gameClient)
-		return
-	}
 
 	// Start MCP HTTP server for commands if requested
 	if *mcpHTTP {
