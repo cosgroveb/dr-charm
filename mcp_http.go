@@ -120,8 +120,7 @@ func (s *MCPHTTPServer) processRequest(req MCPRequest) MCPResponse {
 		}
 		
 	case "notifications/initialized":
-		// Client has acknowledged initialization
-		log.Println("MCP client initialized")
+		// Client has acknowledged initialization - no log needed
 		return resp // Return empty response for notifications
 		
 	case "tools/list":
