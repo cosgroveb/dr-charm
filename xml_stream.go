@@ -98,6 +98,11 @@ func (p *XMLStreamParser) SetGameClient(gc *GameClient) {
 
 // ParseChunk processes a chunk of XML data
 func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
+	// Update activity on game client when we receive data
+	if p.gameClient != nil {
+		p.gameClient.UpdateActivity()
+	}
+	
 	var parseStart time.Time
 	if p.debug {
 		parseStart = time.Now()

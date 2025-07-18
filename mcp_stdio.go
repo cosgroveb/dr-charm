@@ -266,6 +266,14 @@ func (s *MCPStdioServer) getToolsList() map[string]interface{} {
 					"required": []string{"enabled"},
 				},
 			},
+			{
+				"name":        "get_connection_status",
+				"description": "Get current connection status and health information",
+				"inputSchema": map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
 		},
 	}
 }
@@ -356,6 +364,9 @@ func (s *MCPStdioServer) callTool(name string, args map[string]interface{}, game
 			"subscribed": enabled,
 			"message":    fmt.Sprintf("Social event notifications %s", map[bool]string{true: "enabled", false: "disabled"}[enabled]),
 		}, nil
+		
+	case "get_connection_status":
+		return gameClient.GetConnectionInfo(), nil
 		
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

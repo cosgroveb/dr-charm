@@ -247,6 +247,14 @@ func (s *MCPHTTPServer) getToolsList() map[string]interface{} {
 					},
 				},
 			},
+			{
+				"name":        "get_connection_status",
+				"description": "Get current connection status and health information",
+				"inputSchema": map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
 		},
 	}
 }
@@ -324,6 +332,9 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 			"events": events,
 			"count":  len(events),
 		}, nil
+	
+	case "get_connection_status":
+		return s.gameClient.GetConnectionInfo(), nil
 	
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
