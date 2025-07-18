@@ -15,17 +15,17 @@ import (
 // GameClient manages the game connection and output buffer
 // (renamed from GameAPI to better reflect its purpose)
 type GameClient struct {
-	gameConn       net.Conn
-	outputBuffer   *ring.Ring
-	mu             sync.RWMutex
-	lastID         atomic.Uint64
-	connected      atomic.Bool
-	character      string
-	socialBuffer   *social.SocialEventBuffer
-	mcpEventChan   chan<- *social.SocialEvent // Channel to send events to MCP server
-	lastActivity   time.Time
-	activityMu     sync.RWMutex
-	reconnectChan  chan bool // Channel to trigger reconnection attempts
+	gameConn      net.Conn
+	outputBuffer  *ring.Ring
+	mu            sync.RWMutex
+	lastID        atomic.Uint64
+	connected     atomic.Bool
+	character     string
+	socialBuffer  *social.SocialEventBuffer
+	mcpEventChan  chan<- *social.SocialEvent // Channel to send events to MCP server
+	lastActivity  time.Time
+	activityMu    sync.RWMutex
+	reconnectChan chan bool // Channel to trigger reconnection attempts
 }
 
 // OutputLine represents a line of game output with metadata
@@ -46,10 +46,10 @@ func NewGameClient(gameConn net.Conn, character string) *GameClient {
 		reconnectChan: make(chan bool, 1),
 	}
 	client.connected.Store(true)
-	
+
 	// Start connection monitor
 	go client.monitorConnection()
-	
+
 	return client
 }
 
@@ -100,7 +100,6 @@ func (gc *GameClient) SendCommand(command string) error {
 	return nil
 }
 
-
 // SetDisconnected marks the connection as disconnected
 func (gc *GameClient) SetDisconnected() {
 	gc.connected.Store(false)
@@ -130,10 +129,10 @@ func (gc *GameClient) SetMCPEventChannel(ch chan<- *social.SocialEvent) {
 func (gc *GameClient) AddSocialEvent(event *social.SocialEvent) {
 	// Add to buffer
 	gc.socialBuffer.Add(event)
-	
+
 	// Debug log to stderr
 	fmt.Fprintf(os.Stderr, "[GameClient] Added social event: %s from %s\n", event.Subtype, event.From)
-	
+
 	// Send to MCP if channel is set
 	if gc.mcpEventChan != nil {
 		select {
@@ -149,7 +148,7 @@ func (gc *GameClient) AddSocialEvent(event *social.SocialEvent) {
 func (gc *GameClient) monitorConnection() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -157,13 +156,13 @@ func (gc *GameClient) monitorConnection() {
 			gc.activityMu.RLock()
 			lastActivity := gc.lastActivity
 			gc.activityMu.RUnlock()
-			
+
 			if time.Since(lastActivity) > 60*time.Second {
 				// No activity for 60 seconds, connection might be dead
 				if gc.connected.Load() {
 					gc.connected.Store(false)
 					fmt.Fprintf(os.Stderr, "[GameClient] Connection appears to be dead (no activity for 60s)\n")
-					
+
 					// Notify MCP about disconnection
 					if gc.mcpEventChan != nil {
 						event := &social.SocialEvent{
@@ -210,11 +209,11 @@ func (gc *GameClient) GetConnectionInfo() map[string]interface{} {
 	gc.activityMu.RLock()
 	lastActivity := gc.lastActivity
 	gc.activityMu.RUnlock()
-	
+
 	return map[string]interface{}{
-		"connected":      gc.connected.Load(),
-		"character":      gc.character,
-		"last_activity":  lastActivity.Format(time.RFC3339),
-		"idle_seconds":   int(time.Since(lastActivity).Seconds()),
+		"connected":     gc.connected.Load(),
+		"character":     gc.character,
+		"last_activity": lastActivity.Format(time.RFC3339),
+		"idle_seconds":  int(time.Since(lastActivity).Seconds()),
 	}
 }

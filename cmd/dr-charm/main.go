@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"dr-charm/internal/game"
 	"dr-charm/internal/mcp"
 	"dr-charm/internal/ui"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Hardcoded credentials - UPDATE THESE
@@ -266,7 +266,7 @@ func main() {
 	if *mcpHTTP {
 		fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpHTTPPort)
 		mcpHTTPServer := mcp.NewMCPHTTPServer(gameClient, *mcpHTTPPort)
-		
+
 		// Run HTTP server in background
 		go func() {
 			if err := mcpHTTPServer.Start(); err != nil {
@@ -274,15 +274,15 @@ func main() {
 			}
 		}()
 	}
-	
+
 	// Start MCP SSE server for events if requested
 	if *mcpSSE {
 		fmt.Printf("Starting MCP SSE server on port %d...\n", *mcpSSEPort)
 		mcpSSEServer := mcp.NewMCPSSEServer(gameClient, *mcpSSEPort)
-		
+
 		// Connect SSE event channel to game client
 		gameClient.SetMCPEventChannel(mcpSSEServer.GetEventChannel())
-		
+
 		// Run SSE server in background
 		go func() {
 			if err := mcpSSEServer.Start(); err != nil {

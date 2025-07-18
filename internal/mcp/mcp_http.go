@@ -31,22 +31,21 @@ func NewMCPHTTPServer(gameClient *game.GameClient, port int) *MCPHTTPServer {
 // Start begins the MCP HTTP server operation
 func (s *MCPHTTPServer) Start() error {
 	mux := http.NewServeMux()
-	
+
 	// Handle MCP requests
 	mux.HandleFunc("/mcp", s.handleMCPRequest)
-	
+
 	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-	
+
 	s.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),
 		Handler: mux,
 	}
-	
-	
+
 	log.Printf("MCP HTTP server starting on port %d", s.port)
 	return s.server.ListenAndServe()
 }
@@ -65,11 +64,11 @@ func (s *MCPHTTPServer) handleMCPRequest(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Set headers for streaming response
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
-	
+
 	// Read the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -77,25 +76,25 @@ func (s *MCPHTTPServer) handleMCPRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer r.Body.Close()
-	
+
 	// Parse the JSON-RPC request
 	var req MCPRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		s.sendErrorResponse(w, nil, ParseError, "Invalid JSON")
 		return
 	}
-	
+
 	// Debug logging disabled to avoid UI clutter
 	// log.Printf("MCP HTTP received request: method=%s id=%v", req.Method, req.ID)
-	
+
 	// Handle the request
 	resp := s.processRequest(req)
-	
+
 	// Send the response
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("Failed to encode response: %v", err)
 	}
-	
+
 	// Flush the response writer if it supports flushing
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
@@ -106,7 +105,7 @@ func (s *MCPHTTPServer) handleMCPRequest(w http.ResponseWriter, r *http.Request)
 func (s *MCPHTTPServer) processRequest(req MCPRequest) MCPResponse {
 	var resp MCPResponse
 	resp.ID = req.ID
-	
+
 	switch req.Method {
 	case "initialize":
 		// Handle initialization request
@@ -116,19 +115,19 @@ func (s *MCPHTTPServer) processRequest(req MCPRequest) MCPResponse {
 				"tools": map[string]interface{}{},
 			},
 			"serverInfo": map[string]interface{}{
-				"name": "dr-charm-mcp",
+				"name":    "dr-charm-mcp",
 				"version": "1.0.0",
 			},
 		}
-		
+
 	case "notifications/initialized":
 		// Client has acknowledged initialization - no log needed
 		return resp // Return empty response for notifications
-		
+
 	case "tools/list":
 		// Return list of available tools
 		resp.Result = s.getToolsList()
-	
+
 	case "tools/call":
 		// Handle tool invocation
 		if toolName, ok := req.Params["name"].(string); ok {
@@ -154,14 +153,14 @@ func (s *MCPHTTPServer) processRequest(req MCPRequest) MCPResponse {
 				Message: "Missing 'name' parameter",
 			}
 		}
-	
+
 	default:
 		resp.Error = &MCPError{
 			Code:    MethodNotFound,
 			Message: fmt.Sprintf("Unknown method: %s", req.Method),
 		}
 	}
-	
+
 	resp.JSONRPC = "2.0"
 	return resp
 }
@@ -276,21 +275,21 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 			"success": true,
 			"command": command,
 		}, nil
-	
+
 	case "social_say":
 		message, ok := args["message"].(string)
 		if !ok {
 			return nil, fmt.Errorf("message must be a string")
 		}
 		target, _ := args["target"].(string)
-		
+
 		var command string
 		if target != "" {
 			command = fmt.Sprintf("say to %s %s", target, message)
 		} else {
 			command = fmt.Sprintf("say %s", message)
 		}
-		
+
 		err := s.gameClient.SendCommand(command)
 		if err != nil {
 			return nil, err
@@ -299,7 +298,7 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 			"success": true,
 			"command": command,
 		}, nil
-	
+
 	case "social_whisper":
 		target, ok := args["target"].(string)
 		if !ok {
@@ -309,7 +308,7 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 		if !ok {
 			return nil, fmt.Errorf("message must be a string")
 		}
-		
+
 		command := fmt.Sprintf("whisper %s %s", target, message)
 		err := s.gameClient.SendCommand(command)
 		if err != nil {
@@ -319,13 +318,13 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 			"success": true,
 			"command": command,
 		}, nil
-	
+
 	case "get_social_events":
 		count := 10
 		if c, ok := args["count"].(float64); ok {
 			count = int(c)
 		}
-		
+
 		events := s.gameClient.GetSocialBuffer().GetRecent(count)
 		// Debug: log to stderr to avoid UI clutter
 		fmt.Fprintf(os.Stderr, "[MCP] get_social_events: returning %d events\n", len(events))
@@ -333,12 +332,11 @@ func (s *MCPHTTPServer) callTool(name string, args map[string]interface{}) (inte
 			"events": events,
 			"count":  len(events),
 		}, nil
-	
+
 	case "get_connection_status":
 		return s.gameClient.GetConnectionInfo(), nil
-	
+
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 }
-

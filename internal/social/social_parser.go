@@ -34,13 +34,13 @@ var (
 	directedAskPattern     = regexp.MustCompile(`^(.+?) asks you, "(.+)"$`)
 	directedExclaimPattern = regexp.MustCompile(`^(.+?) exclaims to you, "(.+)"$`)
 	directedWhisperPattern = regexp.MustCompile(`^(.+?) whispers to you, "(.+)"$`)
-	
+
 	// General patterns
 	generalSayPattern     = regexp.MustCompile(`^(.+?) says, "(.+)"$`)
 	generalAskPattern     = regexp.MustCompile(`^(.+?) asks, "(.+)"$`)
 	generalExclaimPattern = regexp.MustCompile(`^(.+?) exclaims, "(.+)"$`)
 	generalWhisperPattern = regexp.MustCompile(`^(.+?) whispers, "(.+)"$`)
-	
+
 	// Thought pattern (always directed)
 	thoughtPattern = regexp.MustCompile(`^You hear the faint thoughts of (.+?) echo in your mind`)
 )
@@ -50,15 +50,15 @@ func ParseSocialInteraction(presetType, content, playerName string) *SocialEvent
 	if content == "" {
 		return nil
 	}
-	
+
 	content = strings.TrimSpace(content)
-	
+
 	// Determine subtype based on preset type and content
 	var subtype string
 	var matches []string
 	var directedAtMe bool
 	var speaker, message string
-	
+
 	switch presetType {
 	case "speech":
 		// Check if it's a say, ask, or exclaim
@@ -93,7 +93,7 @@ func ParseSocialInteraction(presetType, content, playerName string) *SocialEvent
 			speaker = matches[1]
 			message = matches[2]
 		}
-		
+
 	case "whisper":
 		if matches = directedWhisperPattern.FindStringSubmatch(content); matches != nil {
 			subtype = SocialWhisper
@@ -106,7 +106,7 @@ func ParseSocialInteraction(presetType, content, playerName string) *SocialEvent
 			speaker = matches[1]
 			message = matches[2]
 		}
-		
+
 	case "thought":
 		if matches = thoughtPattern.FindStringSubmatch(content); matches != nil {
 			subtype = SocialThought
@@ -115,12 +115,12 @@ func ParseSocialInteraction(presetType, content, playerName string) *SocialEvent
 			message = content // Full thought message
 		}
 	}
-	
+
 	// If we couldn't parse it, return nil
 	if speaker == "" {
 		return nil
 	}
-	
+
 	return &SocialEvent{
 		Type:         "social_interaction",
 		Subtype:      subtype,
@@ -138,19 +138,19 @@ func extractSimpleName(fullName string) string {
 	// Remove common titles at the start
 	titles := []string{"Lord", "Lady", "Sir", "Dame", "Captain", "General", "Admiral", "Commander"}
 	name := fullName
-	
+
 	for _, title := range titles {
 		if strings.HasPrefix(name, title+" ") {
 			name = strings.TrimPrefix(name, title+" ")
 			break
 		}
 	}
-	
+
 	// Remove suffix after comma (e.g., "Eldara, the Battle Mage" -> "Eldara")
 	if idx := strings.Index(name, ","); idx != -1 {
 		name = name[:idx]
 	}
-	
+
 	// Trim any extra whitespace
 	return strings.TrimSpace(name)
 }

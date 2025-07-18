@@ -23,7 +23,7 @@ type XMLStreamParser struct {
 	streamText strings.Builder
 	handlers   map[string]XMLHandler
 	debug      bool
-	rawLog     *os.File // Keep file open instead of opening/closing each time
+	rawLog     *os.File    // Keep file open instead of opening/closing each time
 	gameClient *GameClient // Reference to game client for social events
 }
 
@@ -104,7 +104,7 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 	if p.gameClient != nil {
 		p.gameClient.UpdateActivity()
 	}
-	
+
 	var parseStart time.Time
 	if p.debug {
 		parseStart = time.Now()
@@ -216,7 +216,7 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 					if p.debug {
 						fmt.Printf("[DEBUG] Detected social preset: id=%s content=%s\n", id, content)
 					}
-					
+
 					// Parse the social interaction
 					if p.gameClient != nil && content != "" {
 						playerName := p.state.GetPlayerName()
@@ -227,7 +227,7 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 							}
 						}
 					}
-					
+
 					// Include in output
 					if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
 						output.WriteString("\n")

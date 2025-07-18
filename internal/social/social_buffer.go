@@ -27,10 +27,10 @@ func NewSocialEventBuffer(size int) *SocialEventBuffer {
 func (b *SocialEventBuffer) Add(event *SocialEvent) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	
+
 	b.events[b.head] = event
 	b.head = (b.head + 1) % b.maxSize
-	
+
 	if b.count < b.maxSize {
 		b.count++
 	}
@@ -40,25 +40,25 @@ func (b *SocialEventBuffer) Add(event *SocialEvent) {
 func (b *SocialEventBuffer) GetRecent(n int) []*SocialEvent {
 	b.mutex.RLock()
 	defer b.mutex.RUnlock()
-	
+
 	if n > b.count {
 		n = b.count
 	}
-	
+
 	result := make([]*SocialEvent, n)
-	
+
 	// Calculate starting position
 	start := b.head - n
 	if start < 0 {
 		start += b.maxSize
 	}
-	
+
 	// Copy events in order
 	for i := 0; i < n; i++ {
 		idx := (start + i) % b.maxSize
 		result[i] = b.events[idx]
 	}
-	
+
 	return result
 }
 
@@ -73,7 +73,7 @@ func (b *SocialEventBuffer) GetFiltered(n int, filter string) []*SocialEvent {
 func (b *SocialEventBuffer) Clear() {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	
+
 	b.events = make([]*SocialEvent, b.maxSize)
 	b.head = 0
 	b.count = 0

@@ -18,7 +18,7 @@ func TestExtractSimpleName(t *testing.T) {
 		{"Captain Jack", "Jack"},
 		{"Simple", "Simple"},
 	}
-	
+
 	for _, test := range tests {
 		result := extractSimpleName(test.input)
 		if result != test.expected {
@@ -89,26 +89,26 @@ func TestParseSocialInteraction(t *testing.T) {
 			directedAtMe: true,
 		},
 		{
-			name:         "invalid format",
-			presetType:   "whisper",
-			content:      `This is not a valid whisper format`,
-			playerName:   "TestPlayer",
-			shouldParse:  false,
+			name:        "invalid format",
+			presetType:  "whisper",
+			content:     `This is not a valid whisper format`,
+			playerName:  "TestPlayer",
+			shouldParse: false,
 		},
 	}
-	
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result := ParseSocialInteraction(test.presetType, test.content, test.playerName)
-			
+
 			if test.shouldParse && result == nil {
 				t.Fatalf("Expected parse to succeed but got nil")
 			}
-			
+
 			if !test.shouldParse && result != nil {
 				t.Fatalf("Expected parse to fail but got result")
 			}
-			
+
 			if test.shouldParse {
 				if result.Subtype != test.expectedType {
 					t.Errorf("Subtype = %q, want %q", result.Subtype, test.expectedType)

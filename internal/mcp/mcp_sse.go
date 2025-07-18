@@ -44,24 +44,24 @@ func NewMCPSSEServer(gameClient *game.GameClient, port int) *MCPSSEServer {
 // Start begins the MCP SSE server operation
 func (s *MCPSSEServer) Start() error {
 	mux := http.NewServeMux()
-	
+
 	// SSE endpoint for events
 	mux.HandleFunc("/events", s.handleSSE)
-	
+
 	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
-	
+
 	s.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.port),
 		Handler: mux,
 	}
-	
+
 	// Start event broadcaster
 	go s.eventBroadcaster()
-	
+
 	log.Printf("MCP SSE server starting on port %d", s.port)
 	return s.server.ListenAndServe()
 }
@@ -82,15 +82,15 @@ func (s *MCPSSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	// Create a channel for this client
 	clientChan := make(chan *SSEMessage, 100)
-	
+
 	// Register the client
 	s.clientsMux.Lock()
 	s.clients[clientChan] = true
 	s.clientsMux.Unlock()
-	
+
 	// Remove client on disconnect
 	defer func() {
 		s.clientsMux.Lock()
@@ -98,7 +98,7 @@ func (s *MCPSSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 		s.clientsMux.Unlock()
 		close(clientChan)
 	}()
-	
+
 	// Send initial connection event
 	s.sendSSEMessage(w, &SSEMessage{
 		Event: "connected",
@@ -107,7 +107,7 @@ func (s *MCPSSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 			"version": "1.0.0",
 		},
 	})
-	
+
 	// Send recent social events
 	recentEvents := s.gameClient.GetSocialBuffer().GetRecent(10)
 	if len(recentEvents) > 0 {
@@ -116,11 +116,11 @@ func (s *MCPSSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 			Data:  recentEvents,
 		})
 	}
-	
+
 	// Create a ticker for keepalive
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	
+
 	// Listen for events to send to this client
 	for {
 		select {
@@ -129,14 +129,14 @@ func (s *MCPSSEServer) handleSSE(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Error sending SSE message: %v", err)
 				return
 			}
-			
+
 		case <-ticker.C:
 			// Send keepalive comment
 			fmt.Fprintf(w, ":keepalive\n\n")
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
-			
+
 		case <-r.Context().Done():
 			// Client disconnected
 			return
@@ -150,25 +150,25 @@ func (s *MCPSSEServer) sendSSEMessage(w http.ResponseWriter, msg *SSEMessage) er
 	if msg.Event != "" {
 		fmt.Fprintf(w, "event: %s\n", msg.Event)
 	}
-	
+
 	data, err := json.Marshal(msg.Data)
 	if err != nil {
 		return err
 	}
-	
+
 	fmt.Fprintf(w, "data: %s\n", string(data))
-	
+
 	if msg.ID != "" {
 		fmt.Fprintf(w, "id: %s\n", msg.ID)
 	}
-	
+
 	fmt.Fprintf(w, "\n")
-	
+
 	// Flush the data immediately
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	
+
 	return nil
 }
 
@@ -183,7 +183,7 @@ func (s *MCPSSEServer) eventBroadcaster() {
 				Data:  event,
 				ID:    fmt.Sprintf("%d", event.Timestamp),
 			}
-			
+
 			// Broadcast to all clients
 			s.clientsMux.RLock()
 			for clientChan := range s.clients {
@@ -194,10 +194,10 @@ func (s *MCPSSEServer) eventBroadcaster() {
 				}
 			}
 			s.clientsMux.RUnlock()
-			
-			log.Printf("Broadcasted social event: %s from %s to %d clients", 
+
+			log.Printf("Broadcasted social event: %s from %s to %d clients",
 				event.Subtype, event.From, len(s.clients))
-			
+
 		case <-s.done:
 			return
 		}
@@ -215,10 +215,10 @@ func (s *MCPSSEServer) BroadcastGameState(state interface{}) {
 		Event: "game_state",
 		Data:  state,
 	}
-	
+
 	s.clientsMux.RLock()
 	defer s.clientsMux.RUnlock()
-	
+
 	for clientChan := range s.clients {
 		select {
 		case clientChan <- msg:
