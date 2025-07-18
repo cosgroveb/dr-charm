@@ -16,7 +16,7 @@ import (
 type EnhancedModel struct {
 	// Core
 	conn      net.Conn
-	api       *GameAPI
+	api       *GameClient
 	gameState *GameState
 
 	// UI State
@@ -59,7 +59,7 @@ const (
 )
 
 // InitialEnhancedModel creates the enhanced model
-func InitialEnhancedModel(conn net.Conn, api *GameAPI) EnhancedModel {
+func InitialEnhancedModel(conn net.Conn, api *GameClient) EnhancedModel {
 	// Get user home directory for config
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".dr-charm")
@@ -76,6 +76,7 @@ func InitialEnhancedModel(conn net.Conn, api *GameAPI) EnhancedModel {
 		fmt.Printf("DEBUG mode enabled - raw XML will be logged to %s\n", debugPath)
 	}
 	xmlParser := NewXMLStreamParser(debug)
+	xmlParser.SetGameClient(api)
 	gameState := xmlParser.GetState()
 
 	// Set initial game state

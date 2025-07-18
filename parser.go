@@ -31,6 +31,12 @@ type GameState struct {
 	FamiliarWindow   string
 	Triggers         []Trigger
 	Aliases          map[string]string
+	Character        string
+}
+
+// GetPlayerName returns the character name
+func (gs *GameState) GetPlayerName() string {
+	return gs.Character
 }
 
 // RoomInfo holds current room information

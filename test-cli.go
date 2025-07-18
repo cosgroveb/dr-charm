@@ -10,7 +10,7 @@ import (
 )
 
 // Simple CLI mode for testing performance
-func RunCLIMode(gameConn net.Conn, api *GameAPI) {
+func RunCLIMode(gameConn net.Conn, api *GameClient) {
 	fmt.Println("\n=== CLI Mode - Performance Testing ===")
 	fmt.Println("Commands: 'quit' to exit, 'stats' for performance stats")
 	fmt.Println("Press Enter to send commands to the game")
@@ -19,6 +19,7 @@ func RunCLIMode(gameConn net.Conn, api *GameAPI) {
 	debug := os.Getenv("DR_CHARM_DEBUG") == "true"
 	perfTracker := NewPerformanceTracker(debug)
 	xmlParser := NewXMLStreamParser(debug)
+	xmlParser.SetGameClient(api)
 	defer xmlParser.Close()
 
 	// Start reading from game

@@ -22,6 +22,7 @@ type XMLStreamParser struct {
 	handlers   map[string]XMLHandler
 	debug      bool
 	rawLog     *os.File // Keep file open instead of opening/closing each time
+	gameClient *GameClient // Reference to game client for social events
 }
 
 // XMLHandler processes specific XML elements
@@ -87,8 +88,21 @@ func NewXMLStreamParser(debug bool) *XMLStreamParser {
 	return p
 }
 
+// SetGameClient sets the game client reference for social event handling
+func (p *XMLStreamParser) SetGameClient(gc *GameClient) {
+	p.gameClient = gc
+	if gc != nil {
+		p.state.Character = gc.GetCharacter()
+	}
+}
+
 // ParseChunk processes a chunk of XML data
 func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
+	// Update activity on game client when we receive data
+	if p.gameClient != nil {
+		p.gameClient.UpdateActivity()
+	}
+	
 	var parseStart time.Time
 	if p.debug {
 		parseStart = time.Now()
@@ -195,6 +209,28 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 					if p.debug {
 						fmt.Printf("[DEBUG] Added room description to output and state\n")
 					}
+				} else if id == "speech" || id == "whisper" || id == "thought" {
+					// Handle social presets
+					if p.debug {
+						fmt.Printf("[DEBUG] Detected social preset: id=%s content=%s\n", id, content)
+					}
+					
+					// Parse the social interaction
+					if p.gameClient != nil && content != "" {
+						playerName := p.state.GetPlayerName()
+						if event := ParseSocialInteraction(id, content, playerName); event != nil {
+							p.gameClient.AddSocialEvent(event)
+							if p.debug {
+								fmt.Printf("[DEBUG] Parsed social event: %s from %s\n", event.Subtype, event.From)
+							}
+						}
+					}
+					
+					// Include in output
+					if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
+						output.WriteString("\n")
+					}
+					output.WriteString(content)
 				}
 			} else if t.Name.Local == "pushBold" || t.Name.Local == "popBold" {
 				// Skip bold formatting tags

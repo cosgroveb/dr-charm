@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"regexp"
@@ -20,6 +22,25 @@ const (
 )
 
 func main() {
+	// Parse command line flags
+	mcpStdio := flag.Bool("mcp", false, "Enable MCP stdio server (for Claude Code integration)")
+	mcpHTTP := flag.Bool("mcp-http", false, "Enable MCP HTTP server for commands")
+	mcpHTTPPort := flag.Int("mcp-http-port", 8080, "Port for MCP HTTP server")
+	mcpSSE := flag.Bool("mcp-sse", false, "Enable MCP SSE server for events")
+	mcpSSEPort := flag.Int("mcp-sse-port", 8081, "Port for MCP SSE server")
+	flag.Parse()
+
+	// Check environment variables too
+	if !*mcpStdio && os.Getenv("DR_CHARM_MCP") == "true" {
+		*mcpStdio = true
+	}
+	if !*mcpHTTP && os.Getenv("DR_CHARM_MCP_HTTP") == "true" {
+		*mcpHTTP = true
+	}
+	if !*mcpSSE && os.Getenv("DR_CHARM_MCP_SSE") == "true" {
+		*mcpSSE = true
+	}
+
 	fmt.Println("DragonRealms Authentication Test")
 	fmt.Println("================================")
 
@@ -239,22 +260,50 @@ func main() {
 
 	fmt.Println("\n=== Connected to DragonRealms ===")
 
-	// Create API instance
-	api := NewGameAPI(gameConn, character, 1000) // 1000 line buffer
+	// Create game client
+	gameClient := NewGameClient(gameConn, character)
 
-	// Start API server in background
-	go func() {
-		if err := StartAPIServer(api, ":8080"); err != nil {
-			fmt.Printf("API server error: %v\n", err)
-		}
-	}()
+	// Start MCP stdio server if requested (blocks UI)
+	if *mcpStdio {
+		fmt.Fprintln(os.Stderr, "Starting MCP stdio server...")
+		mcpServer := NewMCPStdioServer()
+		mcpServer.Start(gameClient)
+		return
+	}
 
-	fmt.Println("API server starting on http://localhost:8080")
+	// Start MCP HTTP server for commands if requested
+	if *mcpHTTP {
+		fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpHTTPPort)
+		mcpHTTPServer := NewMCPHTTPServer(gameClient, *mcpHTTPPort)
+		
+		// Run HTTP server in background
+		go func() {
+			if err := mcpHTTPServer.Start(); err != nil {
+				log.Printf("MCP HTTP server error: %v", err)
+			}
+		}()
+	}
+	
+	// Start MCP SSE server for events if requested
+	if *mcpSSE {
+		fmt.Printf("Starting MCP SSE server on port %d...\n", *mcpSSEPort)
+		mcpSSEServer := NewMCPSSEServer(gameClient, *mcpSSEPort)
+		
+		// Connect SSE event channel to game client
+		gameClient.SetMCPEventChannel(mcpSSEServer.GetEventChannel())
+		
+		// Run SSE server in background
+		go func() {
+			if err := mcpSSEServer.Start(); err != nil {
+				log.Printf("MCP SSE server error: %v", err)
+			}
+		}()
+	}
 
 	// Check for CLI mode
 	if os.Getenv("DR_CHARM_CLI") == "true" {
 		fmt.Println("Running in CLI mode for testing...")
-		RunCLIMode(gameConn, api)
+		RunCLIMode(gameConn, gameClient)
 		return
 	}
 
@@ -262,7 +311,7 @@ func main() {
 
 	// Start Bubble Tea UI - Enhanced UI is now the default
 	fmt.Println("Starting enhanced UI with multi-pane support...")
-	p := tea.NewProgram(InitialEnhancedModel(gameConn, api), tea.WithAltScreen())
+	p := tea.NewProgram(InitialEnhancedModel(gameConn, gameClient), tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		panic(fmt.Sprintf("Failed to start UI: %v", err))
