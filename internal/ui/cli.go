@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"bufio"
@@ -7,18 +7,21 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"dr-charm/internal/game"
+	"dr-charm/internal/telemetry"
 )
 
-// Simple CLI mode for testing performance
-func RunCLIMode(gameConn net.Conn, api *GameClient) {
+// RunCLIMode runs a simple CLI mode for testing performance
+func RunCLIMode(gameConn net.Conn, api *game.GameClient) {
 	fmt.Println("\n=== CLI Mode - Performance Testing ===")
 	fmt.Println("Commands: 'quit' to exit, 'stats' for performance stats")
 	fmt.Println("Press Enter to send commands to the game")
 
 	// Create performance tracker
 	debug := os.Getenv("DR_CHARM_DEBUG") == "true"
-	perfTracker := NewPerformanceTracker(debug)
-	xmlParser := NewXMLStreamParser(debug)
+	perfTracker := telemetry.NewPerformanceTracker(debug)
+	xmlParser := game.NewXMLStreamParser(debug)
 	xmlParser.SetGameClient(api)
 	defer xmlParser.Close()
 

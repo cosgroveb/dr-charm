@@ -1,4 +1,4 @@
-package main
+package game
 
 import (
 	"container/ring"
@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"dr-charm/internal/social"
 )
 
 // GameClient manages the game connection and output buffer
@@ -19,8 +21,8 @@ type GameClient struct {
 	lastID         atomic.Uint64
 	connected      atomic.Bool
 	character      string
-	socialBuffer   *SocialEventBuffer
-	mcpEventChan   chan<- *SocialEvent // Channel to send events to MCP server
+	socialBuffer   *social.SocialEventBuffer
+	mcpEventChan   chan<- *social.SocialEvent // Channel to send events to MCP server
 	lastActivity   time.Time
 	activityMu     sync.RWMutex
 	reconnectChan  chan bool // Channel to trigger reconnection attempts
@@ -39,7 +41,7 @@ func NewGameClient(gameConn net.Conn, character string) *GameClient {
 		gameConn:      gameConn,
 		outputBuffer:  ring.New(1000), // Default buffer size
 		character:     character,
-		socialBuffer:  NewSocialEventBuffer(1000), // 1000 social events
+		socialBuffer:  social.NewSocialEventBuffer(1000), // 1000 social events
 		lastActivity:  time.Now(),
 		reconnectChan: make(chan bool, 1),
 	}
@@ -77,7 +79,7 @@ func (gc *GameClient) SendCommand(command string) error {
 		gc.connected.Store(false)
 		// Notify MCP about disconnection
 		if gc.mcpEventChan != nil {
-			event := &SocialEvent{
+			event := &social.SocialEvent{
 				Type:      "system",
 				Subtype:   "connection_lost",
 				Timestamp: time.Now().Unix(),
@@ -115,17 +117,17 @@ func (gc *GameClient) GetCharacter() string {
 }
 
 // GetSocialBuffer returns the social event buffer
-func (gc *GameClient) GetSocialBuffer() *SocialEventBuffer {
+func (gc *GameClient) GetSocialBuffer() *social.SocialEventBuffer {
 	return gc.socialBuffer
 }
 
 // SetMCPEventChannel sets the channel for sending events to MCP
-func (gc *GameClient) SetMCPEventChannel(ch chan<- *SocialEvent) {
+func (gc *GameClient) SetMCPEventChannel(ch chan<- *social.SocialEvent) {
 	gc.mcpEventChan = ch
 }
 
 // AddSocialEvent adds a social event to the buffer and sends to MCP if connected
-func (gc *GameClient) AddSocialEvent(event *SocialEvent) {
+func (gc *GameClient) AddSocialEvent(event *social.SocialEvent) {
 	// Add to buffer
 	gc.socialBuffer.Add(event)
 	
@@ -164,7 +166,7 @@ func (gc *GameClient) monitorConnection() {
 					
 					// Notify MCP about disconnection
 					if gc.mcpEventChan != nil {
-						event := &SocialEvent{
+						event := &social.SocialEvent{
 							Type:      "system",
 							Subtype:   "connection_lost",
 							Timestamp: time.Now().Unix(),
@@ -196,6 +198,11 @@ func (gc *GameClient) UpdateActivity() {
 // IsConnected returns the current connection status
 func (gc *GameClient) IsConnected() bool {
 	return gc.connected.Load()
+}
+
+// SetConnected updates the connection status
+func (gc *GameClient) SetConnected(connected bool) {
+	gc.connected.Store(connected)
 }
 
 // GetConnectionInfo returns connection status information

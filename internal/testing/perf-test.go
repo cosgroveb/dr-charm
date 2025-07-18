@@ -1,10 +1,13 @@
-package main
+package testing
 
 import (
 	"fmt"
 	"net"
 	"os"
 	"time"
+
+	"dr-charm/internal/game"
+	"dr-charm/internal/telemetry"
 )
 
 // RunPerfTest runs an automated performance test
@@ -25,8 +28,8 @@ func RunPerfTest() {
 
 	// Create performance tracker
 	debug := true
-	perfTracker := NewPerformanceTracker(debug)
-	xmlParser := NewXMLStreamParser(debug)
+	perfTracker := telemetry.NewPerformanceTracker(debug)
+	xmlParser := game.NewXMLStreamParser(debug)
 
 	// Simulate receiving game data
 	testData := []string{

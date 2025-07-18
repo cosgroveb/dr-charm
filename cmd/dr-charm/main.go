@@ -12,6 +12,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"dr-charm/internal/game"
+	"dr-charm/internal/mcp"
+	"dr-charm/internal/ui"
 )
 
 // Hardcoded credentials - UPDATE THESE
@@ -257,12 +260,12 @@ func main() {
 	fmt.Println("\n=== Connected to DragonRealms ===")
 
 	// Create game client
-	gameClient := NewGameClient(gameConn, character)
+	gameClient := game.NewGameClient(gameConn, character)
 
 	// Start MCP HTTP server for commands if requested
 	if *mcpHTTP {
 		fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpHTTPPort)
-		mcpHTTPServer := NewMCPHTTPServer(gameClient, *mcpHTTPPort)
+		mcpHTTPServer := mcp.NewMCPHTTPServer(gameClient, *mcpHTTPPort)
 		
 		// Run HTTP server in background
 		go func() {
@@ -275,7 +278,7 @@ func main() {
 	// Start MCP SSE server for events if requested
 	if *mcpSSE {
 		fmt.Printf("Starting MCP SSE server on port %d...\n", *mcpSSEPort)
-		mcpSSEServer := NewMCPSSEServer(gameClient, *mcpSSEPort)
+		mcpSSEServer := mcp.NewMCPSSEServer(gameClient, *mcpSSEPort)
 		
 		// Connect SSE event channel to game client
 		gameClient.SetMCPEventChannel(mcpSSEServer.GetEventChannel())
@@ -291,7 +294,7 @@ func main() {
 	// Check for CLI mode
 	if os.Getenv("DR_CHARM_CLI") == "true" {
 		fmt.Println("Running in CLI mode for testing...")
-		RunCLIMode(gameConn, gameClient)
+		ui.RunCLIMode(gameConn, gameClient)
 		return
 	}
 
@@ -299,7 +302,7 @@ func main() {
 
 	// Start Bubble Tea UI - Enhanced UI is now the default
 	fmt.Println("Starting enhanced UI with multi-pane support...")
-	p := tea.NewProgram(InitialEnhancedModel(gameConn, gameClient), tea.WithAltScreen())
+	p := tea.NewProgram(ui.InitialEnhancedModel(gameConn, gameClient), tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
 		panic(fmt.Sprintf("Failed to start UI: %v", err))

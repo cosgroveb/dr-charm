@@ -1,4 +1,4 @@
-package main
+package mcp
 
 import (
 	"encoding/json"
@@ -7,16 +7,19 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"dr-charm/internal/game"
+	"dr-charm/internal/social"
 )
 
 // MCPSSEServer handles Model Context Protocol Server-Sent Events
 type MCPSSEServer struct {
-	gameClient *GameClient
+	gameClient *game.GameClient
 	port       int
 	server     *http.Server
 	clients    map[chan *SSEMessage]bool
 	clientsMux sync.RWMutex
-	eventChan  chan *SocialEvent
+	eventChan  chan *social.SocialEvent
 	done       chan bool
 }
 
@@ -28,12 +31,12 @@ type SSEMessage struct {
 }
 
 // NewMCPSSEServer creates a new MCP SSE server instance
-func NewMCPSSEServer(gameClient *GameClient, port int) *MCPSSEServer {
+func NewMCPSSEServer(gameClient *game.GameClient, port int) *MCPSSEServer {
 	return &MCPSSEServer{
 		gameClient: gameClient,
 		port:       port,
 		clients:    make(map[chan *SSEMessage]bool),
-		eventChan:  make(chan *SocialEvent, 100),
+		eventChan:  make(chan *social.SocialEvent, 100),
 		done:       make(chan bool),
 	}
 }
@@ -202,7 +205,7 @@ func (s *MCPSSEServer) eventBroadcaster() {
 }
 
 // GetEventChannel returns the channel for sending events to SSE
-func (s *MCPSSEServer) GetEventChannel() chan<- *SocialEvent {
+func (s *MCPSSEServer) GetEventChannel() chan<- *social.SocialEvent {
 	return s.eventChan
 }
 

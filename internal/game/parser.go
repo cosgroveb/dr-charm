@@ -1,4 +1,4 @@
-package main
+package game
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"dr-charm/internal/automation"
 )
 
 // GameState holds parsed game state
@@ -29,7 +31,7 @@ type GameState struct {
 	Spell            string
 	GameTime         string
 	FamiliarWindow   string
-	Triggers         []Trigger
+	Triggers         []automation.Trigger
 	Aliases          map[string]string
 	Character        string
 }

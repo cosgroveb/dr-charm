@@ -1,4 +1,4 @@
-package main
+package game
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"dr-charm/internal/social"
 )
 
 // XMLStreamParser handles streaming XML parsing for DragonRealms protocol
@@ -218,7 +220,7 @@ func (p *XMLStreamParser) ParseChunk(data []byte) (string, error) {
 					// Parse the social interaction
 					if p.gameClient != nil && content != "" {
 						playerName := p.state.GetPlayerName()
-						if event := ParseSocialInteraction(id, content, playerName); event != nil {
+						if event := social.ParseSocialInteraction(id, content, playerName); event != nil {
 							p.gameClient.AddSocialEvent(event)
 							if p.debug {
 								fmt.Printf("[DEBUG] Parsed social event: %s from %s\n", event.Subtype, event.From)
@@ -692,4 +694,9 @@ func (p *XMLStreamParser) Close() {
 		p.rawLog.Close()
 		p.rawLog = nil
 	}
+}
+
+// IsDebug returns whether debug mode is enabled
+func (p *XMLStreamParser) IsDebug() bool {
+	return p.debug
 }

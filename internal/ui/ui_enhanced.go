@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"fmt"
@@ -10,14 +10,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"dr-charm/internal/automation"
+	"dr-charm/internal/game"
+	"dr-charm/internal/telemetry"
 )
 
 // EnhancedModel is the full-featured UI model
 type EnhancedModel struct {
 	// Core
 	conn      net.Conn
-	api       *GameClient
-	gameState *GameState
+	api       *game.GameClient
+	gameState *game.GameState
 
 	// UI State
 	width        int
@@ -34,18 +38,18 @@ type EnhancedModel struct {
 	historyIndex int
 
 	// Systems
-	xmlParser      *XMLStreamParser
+	xmlParser      *game.XMLStreamParser
 	layout         *Layout
-	triggerManager *TriggerManager
+	triggerManager *automation.TriggerManager
 	themeManager   *ThemeManager
-	logger         *Logger
-	perfTracker    *PerformanceTracker
+	logger         *telemetry.Logger
+	perfTracker    *telemetry.PerformanceTracker
 
 	// Output buffer
 	mainOutput []string
 
 	// Current event being tracked
-	currentEvent *EventMetrics
+	currentEvent *telemetry.EventMetrics
 }
 
 // ViewMode represents different UI modes
@@ -59,7 +63,7 @@ const (
 )
 
 // InitialEnhancedModel creates the enhanced model
-func InitialEnhancedModel(conn net.Conn, api *GameClient) EnhancedModel {
+func InitialEnhancedModel(conn net.Conn, api *game.GameClient) EnhancedModel {
 	// Get user home directory for config
 	home, _ := os.UserHomeDir()
 	configDir := filepath.Join(home, ".dr-charm")
@@ -75,7 +79,7 @@ func InitialEnhancedModel(conn net.Conn, api *GameClient) EnhancedModel {
 		debugPath := filepath.Join(home, ".dr-charm", "logs", "debug", fmt.Sprintf("raw-xml-%s.log", time.Now().Format("2006-01-02")))
 		fmt.Printf("DEBUG mode enabled - raw XML will be logged to %s\n", debugPath)
 	}
-	xmlParser := NewXMLStreamParser(debug)
+	xmlParser := game.NewXMLStreamParser(debug)
 	xmlParser.SetGameClient(api)
 	gameState := xmlParser.GetState()
 
@@ -104,10 +108,10 @@ func InitialEnhancedModel(conn net.Conn, api *GameClient) EnhancedModel {
 		history:        []string{},
 		xmlParser:      xmlParser,
 		layout:         NewLayout(80, 24, debug),
-		triggerManager: NewTriggerManager(),
+		triggerManager: automation.NewTriggerManager(),
 		themeManager:   NewThemeManager(filepath.Join(configDir, "themes")),
-		logger:         NewLogger(filepath.Join(configDir, "logs")),
-		perfTracker:    NewPerformanceTracker(debug),
+		logger:         telemetry.NewLogger(filepath.Join(configDir, "logs")),
+		perfTracker:    telemetry.NewPerformanceTracker(debug),
 	}
 }
 
@@ -145,7 +149,7 @@ func (m EnhancedModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		m.logger.Stop()
 		if m.api != nil {
-			m.api.connected.Store(false)
+			m.api.SetConnected(false)
 		}
 		return m, tea.Quit
 	}
@@ -316,7 +320,7 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 	metrics := StartGamePaneMetrics()
 	defer func() {
 		metrics.TotalTime = time.Since(metrics.ParseStart)
-		if s := metrics.String(); s != "" && m.perfTracker != nil && m.perfTracker.debug {
+		if s := metrics.String(); s != "" && m.perfTracker != nil && m.perfTracker.IsDebug() {
 			fmt.Println(s)
 		}
 	}()
@@ -396,7 +400,7 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 						// Only update if it's a different room
 						if m.gameState.Room.Title != roomName {
 							m.gameState.Room.Title = roomName
-							if m.xmlParser.debug {
+							if m.xmlParser.IsDebug() {
 								fmt.Printf("[DEBUG] Set room title: %s\n", roomName)
 								fmt.Printf("[DEBUG] Current room desc: %s\n", m.gameState.Room.Description)
 							}
@@ -469,7 +473,7 @@ func (m EnhancedModel) handleGameMessage(msg enhancedGameMsg) (tea.Model, tea.Cm
 
 						if len(cleanedObjects) > 0 {
 							m.gameState.Room.Objects = cleanedObjects
-							if m.xmlParser.debug {
+							if m.xmlParser.IsDebug() {
 								fmt.Printf("[DEBUG] Parsed room objects: %v\n", cleanedObjects)
 							}
 							// Update the layout immediately
@@ -622,7 +626,7 @@ func (m EnhancedModel) View() string {
 
 	// Log total View() time if it's slow
 	elapsed := time.Since(viewStart)
-	if elapsed > 100*time.Millisecond && m.perfTracker != nil && m.perfTracker.debug {
+	if elapsed > 100*time.Millisecond && m.perfTracker != nil && m.perfTracker.IsDebug() {
 		fmt.Printf("[RENDER] View() total took %v\n", elapsed)
 	}
 
@@ -976,7 +980,7 @@ func (m EnhancedModel) buildOutput(maxLines int) string {
 
 	// Debug what we're rendering
 	renderLines := endIdx - startIdx
-	if m.perfTracker != nil && m.perfTracker.debug {
+	if m.perfTracker != nil && m.perfTracker.IsDebug() {
 		fmt.Printf("[RENDER] buildOutput: rendering %d of %d total lines\n", renderLines, totalLines)
 	}
 
@@ -1016,14 +1020,14 @@ func getStanceName(stance int) string {
 // Message types
 type enhancedGameMsg struct {
 	text  string
-	state *GameState
-	event *EventMetrics
+	state *game.GameState
+	event *telemetry.EventMetrics
 }
 
 type errMsg error
 
 // readEnhancedGameOutput reads and parses game output
-func readEnhancedGameOutput(conn net.Conn, parser *XMLStreamParser, perfTracker *PerformanceTracker) tea.Cmd {
+func readEnhancedGameOutput(conn net.Conn, parser *game.XMLStreamParser, perfTracker *telemetry.PerformanceTracker) tea.Cmd {
 	return func() tea.Msg {
 		// Start tracking this event
 		event := perfTracker.StartEvent()

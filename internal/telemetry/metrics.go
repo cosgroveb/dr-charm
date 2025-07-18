@@ -1,4 +1,4 @@
-package main
+package telemetry
 
 import (
 	"fmt"
@@ -165,4 +165,9 @@ func calculateMax(times []time.Duration) time.Duration {
 		}
 	}
 	return max
+}
+
+// IsDebug returns whether debug mode is enabled
+func (p *PerformanceTracker) IsDebug() bool {
+	return p.debug
 }

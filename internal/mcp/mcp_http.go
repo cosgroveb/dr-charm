@@ -1,4 +1,4 @@
-package main
+package mcp
 
 import (
 	"encoding/json"
@@ -8,18 +8,20 @@ import (
 	"net/http"
 	"os"
 	"sync"
+
+	"dr-charm/internal/game"
 )
 
 // MCPHTTPServer handles Model Context Protocol over HTTP for commands
 type MCPHTTPServer struct {
-	gameClient  *GameClient
+	gameClient  *game.GameClient
 	port        int
 	server      *http.Server
 	outputMutex sync.Mutex
 }
 
 // NewMCPHTTPServer creates a new MCP HTTP server instance
-func NewMCPHTTPServer(gameClient *GameClient, port int) *MCPHTTPServer {
+func NewMCPHTTPServer(gameClient *game.GameClient, port int) *MCPHTTPServer {
 	return &MCPHTTPServer{
 		gameClient: gameClient,
 		port:       port,

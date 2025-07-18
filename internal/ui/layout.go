@@ -1,10 +1,12 @@
-package main
+package ui
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"dr-charm/internal/game"
 )
 
 // Pane represents a window pane in the layout
@@ -383,7 +385,7 @@ func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
 }
 
 // UpdateFromGameState updates panes based on game state
-func (l *Layout) UpdateFromGameState(state *GameState) {
+func (l *Layout) UpdateFromGameState(state *game.GameState) {
 	// Debug output
 	if l.debug {
 		fmt.Printf("[DEBUG] UpdateFromGameState - Title: '%s', Desc: '%s', Exits: %v, Objects: %v\n",

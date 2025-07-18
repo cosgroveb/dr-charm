@@ -8,7 +8,7 @@ build: dr-charm
 
 # Build the main dr-charm client
 dr-charm:
-	go build -o dr-charm .
+	go build -o dr-charm ./cmd/dr-charm
 
 
 # Format code
@@ -25,7 +25,7 @@ clean:
 
 # Install dr-charm
 install: build
-	go install .
+	go install ./cmd/dr-charm
 
 # Run with debug mode
 debug:

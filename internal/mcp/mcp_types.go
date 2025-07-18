@@ -1,4 +1,4 @@
-package main
+package mcp
 
 // MCPRequest represents a JSON-RPC request
 type MCPRequest struct {
