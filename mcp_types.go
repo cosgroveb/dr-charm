@@ -23,6 +23,13 @@ type MCPError struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+// MCPNotification represents a JSON-RPC notification (no id, no response expected)
+type MCPNotification struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+}
+
 // Error codes
 const (
 	ParseError     = -32700

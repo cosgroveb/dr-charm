@@ -2,7 +2,9 @@ package main
 
 import (
 	"container/ring"
+	"fmt"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -106,6 +108,9 @@ func (gc *GameClient) SetMCPEventChannel(ch chan<- *SocialEvent) {
 func (gc *GameClient) AddSocialEvent(event *SocialEvent) {
 	// Add to buffer
 	gc.socialBuffer.Add(event)
+	
+	// Debug log to stderr
+	fmt.Fprintf(os.Stderr, "[GameClient] Added social event: %s from %s\n", event.Subtype, event.From)
 	
 	// Send to MCP if channel is set
 	if gc.mcpEventChan != nil {
