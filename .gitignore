@@ -41,6 +41,9 @@ test_commands.txt
 # Temporary files
 tmp/
 
+# Log files
+*.log
+
 # Config files with credentials
 .dr-charm.yaml
 config.yaml
