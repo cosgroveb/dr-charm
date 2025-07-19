@@ -31,27 +31,44 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 
 ### Utility Features ✅
 - **Session logging** - Save sessions to ~/.dr-charm/logs/
-- **HTTP API** - Control client via REST API on port 8080
+- **MCP Integration** - Model Context Protocol support for Claude
 - **Custom themes** - Create your own in ~/.dr-charm/themes/
 - **Configurable triggers** - Add custom text highlights
 
 ## Usage
 
 ```bash
-./dr-charm
+# Using command-line flags
+./dr-charm -account <username> -password <password> -character <name>
+
+# Using environment variables
+DR_ACCOUNT=<username> DR_PASSWORD=<password> DR_CHARACTER=<name> ./dr-charm
+
+# With MCP servers enabled
+./dr-charm -account <username> -password <password> -character <name> -mcp-http -mcp-sse
 ```
 
 The client starts with the enhanced multi-pane UI by default. Press F2 to toggle to single-pane mode.
 
-The client uses hardcoded credentials in `main.go`:
-- Account: cosgroveb4
-- Password: [configured]
-- Character: Cennedig
+### Configuration Options
+
+**Required credentials** (must be provided via flags or environment variables):
+- `-account` or `DR_ACCOUNT` - DragonRealms account name
+- `-password` or `DR_PASSWORD` - Account password  
+- `-character` or `DR_CHARACTER` - Character name to play
+
+**Optional flags:**
+- `-mcp-http` - Enable MCP HTTP server for commands (port 8080)
+- `-mcp-http-port` - Custom port for MCP HTTP server (default: 8080)
+- `-mcp-sse` - Enable MCP SSE server for events (port 8081)
+- `-mcp-sse-port` - Custom port for MCP SSE server (default: 8081)
 
 ## Building
 
 ```bash
-go build -o dr-charm .
+make build
+# or
+go build -o dr-charm ./cmd/dr-charm
 ```
 
 ## Keyboard Shortcuts
@@ -103,39 +120,18 @@ go build -o dr-charm .
 - `sk` → `skin`
 - `loot` → `loot all`
 
-## API Server
+## MCP Integration
 
-The client automatically starts an HTTP API server on port 8080 that allows external control:
+The client supports Model Context Protocol (MCP) for integration with Claude and other AI assistants. Enable MCP servers with the `-mcp-http` and `-mcp-sse` flags.
 
-```bash
-# Send a command
-curl -X POST http://localhost:8080/command \
-  -H "Content-Type: application/json" \
-  -d '{"command": "look"}'
+### MCP Tools Available:
+- `send_command` - Send any command to the game
+- `social_say` - Say something in the game
+- `social_whisper` - Whisper to someone
+- `get_social_events` - Get recent social interactions
+- `get_connection_status` - Check connection health
 
-# Get recent output
-curl http://localhost:8080/output
-```
-
-### CLI Client
-
-A command-line client is provided for easier interaction with the API:
-
-```bash
-# Interactive mode
-./drcli
-
-# Send single command
-./drcli -c "look"
-
-# Watch game output
-./drcli -w
-
-# See more options
-./drcli -h
-```
-
-See [API.md](API.md) for full API documentation and [cmd/drcli/README.md](cmd/drcli/README.md) for CLI usage.
+For Claude integration, add the project's `.mcp.json` configuration to your Claude settings.
 
 ## Configuration
 

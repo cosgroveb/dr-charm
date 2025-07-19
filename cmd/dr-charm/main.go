@@ -17,22 +17,45 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Hardcoded credentials - UPDATE THESE
-const (
-	account   = "cosgroveb4" // Outlander uses lowercase
-	password  = "rupture-ella"
-	character = "Cennedig"
-)
-
 func main() {
 	// Parse command line flags
+	accountFlag := flag.String("account", "", "DragonRealms account name")
+	passwordFlag := flag.String("password", "", "DragonRealms account password")
+	characterFlag := flag.String("character", "", "Character name to play")
 	mcpHTTP := flag.Bool("mcp-http", false, "Enable MCP HTTP server for commands")
 	mcpHTTPPort := flag.Int("mcp-http-port", 8080, "Port for MCP HTTP server")
 	mcpSSE := flag.Bool("mcp-sse", false, "Enable MCP SSE server for events")
 	mcpSSEPort := flag.Int("mcp-sse-port", 8081, "Port for MCP SSE server")
 	flag.Parse()
+	
+	// Get credentials from flags or environment variables
+	account := *accountFlag
+	if account == "" {
+		account = os.Getenv("DR_ACCOUNT")
+	}
+	
+	password := *passwordFlag
+	if password == "" {
+		password = os.Getenv("DR_PASSWORD")
+	}
+	
+	character := *characterFlag
+	if character == "" {
+		character = os.Getenv("DR_CHARACTER")
+	}
+	
+	// Validate required credentials
+	if account == "" || password == "" || character == "" {
+		fmt.Fprintf(os.Stderr, "Error: Missing required credentials\n\n")
+		fmt.Fprintf(os.Stderr, "Please provide credentials using either:\n")
+		fmt.Fprintf(os.Stderr, "1. Command-line flags:\n")
+		fmt.Fprintf(os.Stderr, "   -account <name> -password <pass> -character <name>\n\n")
+		fmt.Fprintf(os.Stderr, "2. Environment variables:\n")
+		fmt.Fprintf(os.Stderr, "   DR_ACCOUNT=<name> DR_PASSWORD=<pass> DR_CHARACTER=<name>\n")
+		os.Exit(1)
+	}
 
-	// Check environment variables too
+	// Check environment variables for MCP flags
 	if !*mcpHTTP && os.Getenv("DR_CHARM_MCP_HTTP") == "true" {
 		*mcpHTTP = true
 	}
@@ -43,9 +66,6 @@ func main() {
 	fmt.Println("DragonRealms Authentication Test")
 	fmt.Println("================================")
 
-	if password == "" {
-		panic("Please update the password constant in main.go")
-	}
 
 	// Connect to auth server
 	conn, err := net.DialTimeout("tcp", "eaccess.play.net:7900", 30*time.Second)
