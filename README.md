@@ -38,6 +38,9 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 ## Usage
 
 ```bash
+# Using a configuration file
+./dr-charm -config ~/.dr-charm/config.yaml
+
 # Using command-line flags
 ./dr-charm -account <username> -password <password> -character <name>
 
@@ -45,22 +48,36 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 DR_ACCOUNT=<username> DR_PASSWORD=<password> DR_CHARACTER=<name> ./dr-charm
 
 # With MCP servers enabled
-./dr-charm -account <username> -password <password> -character <name> -mcp-http -mcp-sse
+./dr-charm -config config.yaml -mcp-http -mcp-sse
 ```
 
 The client starts with the enhanced multi-pane UI by default. Press F2 to toggle to single-pane mode.
 
 ### Configuration Options
 
-**Required credentials** (must be provided via flags or environment variables):
-- `-account` or `DR_ACCOUNT` - DragonRealms account name
-- `-password` or `DR_PASSWORD` - Account password  
-- `-character` or `DR_CHARACTER` - Character name to play
+Configuration is loaded in this order (later sources override earlier ones):
+1. Configuration file (if specified or found in default locations)
+2. Environment variables
+3. Command-line flags
 
-**Optional flags:**
-- `-mcp-http` - Enable MCP HTTP server for commands (port 8080)
+**Configuration file locations** (checked in order):
+- Path specified with `-config` flag
+- `.dr-charm.yaml` in current directory
+- `~/.dr-charm/config.yaml`
+- `~/.config/dr-charm/config.yaml`
+
+See `config.example.yaml` for the configuration file format.
+
+**Required credentials** (must be provided via config file, env vars, or flags):
+- `account` / `DR_ACCOUNT` / `-account` - DragonRealms account name
+- `password` / `DR_PASSWORD` / `-password` - Account password  
+- `character` / `DR_CHARACTER` / `-character` - Character name to play
+
+**Optional settings:**
+- `-config` - Path to configuration file
+- `-mcp-http` - Enable MCP HTTP server for commands
 - `-mcp-http-port` - Custom port for MCP HTTP server (default: 8080)
-- `-mcp-sse` - Enable MCP SSE server for events (port 8081)
+- `-mcp-sse` - Enable MCP SSE server for events
 - `-mcp-sse-port` - Custom port for MCP SSE server (default: 8081)
 
 ## Building
@@ -136,7 +153,7 @@ For Claude integration, add the project's `.mcp.json` configuration to your Clau
 ## Configuration
 
 ### Themes
-Custom themes can be created in `~/.dr-charm/themes/` as JSON files. See the built-in themes for examples.
+Custom themes can be created in `~/.dr-charm/themes/` as YAML files. See the built-in themes for examples.
 
 ### Logs
 Session logs are saved to `~/.dr-charm/logs/` with timestamps. Logs include all game output and commands.

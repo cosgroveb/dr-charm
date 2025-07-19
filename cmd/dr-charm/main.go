@@ -7,10 +7,12 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"dr-charm/internal/config"
 	"dr-charm/internal/game"
 	"dr-charm/internal/mcp"
 	"dr-charm/internal/ui"
@@ -19,53 +21,100 @@ import (
 
 func main() {
 	// Parse command line flags
+	configFile := flag.String("config", "", "Path to configuration file")
 	accountFlag := flag.String("account", "", "DragonRealms account name")
 	passwordFlag := flag.String("password", "", "DragonRealms account password")
 	characterFlag := flag.String("character", "", "Character name to play")
 	mcpHTTP := flag.Bool("mcp-http", false, "Enable MCP HTTP server for commands")
-	mcpHTTPPort := flag.Int("mcp-http-port", 8080, "Port for MCP HTTP server")
+	mcpHTTPPort := flag.Int("mcp-http-port", 0, "Port for MCP HTTP server")
 	mcpSSE := flag.Bool("mcp-sse", false, "Enable MCP SSE server for events")
-	mcpSSEPort := flag.Int("mcp-sse-port", 8081, "Port for MCP SSE server")
+	mcpSSEPort := flag.Int("mcp-sse-port", 0, "Port for MCP SSE server")
 	flag.Parse()
-	
-	// Get credentials from flags or environment variables
-	account := *accountFlag
-	if account == "" {
-		account = os.Getenv("DR_ACCOUNT")
-	}
-	
-	password := *passwordFlag
-	if password == "" {
-		password = os.Getenv("DR_PASSWORD")
-	}
-	
-	character := *characterFlag
-	if character == "" {
-		character = os.Getenv("DR_CHARACTER")
-	}
-	
-	// Validate required credentials
-	if account == "" || password == "" || character == "" {
-		fmt.Fprintf(os.Stderr, "Error: Missing required credentials\n\n")
-		fmt.Fprintf(os.Stderr, "Please provide credentials using either:\n")
-		fmt.Fprintf(os.Stderr, "1. Command-line flags:\n")
-		fmt.Fprintf(os.Stderr, "   -account <name> -password <pass> -character <name>\n\n")
-		fmt.Fprintf(os.Stderr, "2. Environment variables:\n")
-		fmt.Fprintf(os.Stderr, "   DR_ACCOUNT=<name> DR_PASSWORD=<pass> DR_CHARACTER=<name>\n")
-		os.Exit(1)
+
+	// Start with empty config
+	cfg := &config.Config{}
+
+	// Load from config file if specified
+	if *configFile != "" {
+		fileCfg, err := config.LoadFromFile(*configFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config file: %v\n", err)
+			os.Exit(1)
+		}
+		cfg = fileCfg
+	} else {
+		// Try default locations
+		home, _ := os.UserHomeDir()
+		defaultPaths := []string{
+			".dr-charm.yaml",
+			filepath.Join(home, ".dr-charm", "config.yaml"),
+			filepath.Join(home, ".config", "dr-charm", "config.yaml"),
+		}
+
+		for _, path := range defaultPaths {
+			if fileCfg, err := config.LoadFromFile(path); err == nil {
+				cfg = fileCfg
+				break
+			}
+		}
 	}
 
-	// Check environment variables for MCP flags
-	if !*mcpHTTP && os.Getenv("DR_CHARM_MCP_HTTP") == "true" {
-		*mcpHTTP = true
+	// Override with environment variables
+	envCfg := &config.Config{
+		Account:   os.Getenv("DR_ACCOUNT"),
+		Password:  os.Getenv("DR_PASSWORD"),
+		Character: os.Getenv("DR_CHARACTER"),
 	}
-	if !*mcpSSE && os.Getenv("DR_CHARM_MCP_SSE") == "true" {
-		*mcpSSE = true
+	cfg.Merge(envCfg)
+
+	// Override with command line flags
+	flagCfg := &config.Config{
+		Account:   *accountFlag,
+		Password:  *passwordFlag,
+		Character: *characterFlag,
+	}
+	flagCfg.MCPSettings.HTTPEnabled = *mcpHTTP
+	flagCfg.MCPSettings.SSEEnabled = *mcpSSE
+	if *mcpHTTPPort != 0 {
+		flagCfg.MCPSettings.HTTPPort = *mcpHTTPPort
+	}
+	if *mcpSSEPort != 0 {
+		flagCfg.MCPSettings.SSEPort = *mcpSSEPort
+	}
+	cfg.Merge(flagCfg)
+
+	// Set defaults for ports if not specified
+	if cfg.MCPSettings.HTTPPort == 0 {
+		cfg.MCPSettings.HTTPPort = 8080
+	}
+	if cfg.MCPSettings.SSEPort == 0 {
+		cfg.MCPSettings.SSEPort = 8081
+	}
+
+	// Check environment variables for MCP flags (legacy support)
+	if !cfg.MCPSettings.HTTPEnabled && os.Getenv("DR_CHARM_MCP_HTTP") == "true" {
+		cfg.MCPSettings.HTTPEnabled = true
+	}
+	if !cfg.MCPSettings.SSEEnabled && os.Getenv("DR_CHARM_MCP_SSE") == "true" {
+		cfg.MCPSettings.SSEEnabled = true
+	}
+
+	// Validate required credentials
+	if cfg.Account == "" || cfg.Password == "" || cfg.Character == "" {
+		fmt.Fprintf(os.Stderr, "Error: Missing required credentials\n\n")
+		fmt.Fprintf(os.Stderr, "Please provide credentials using one of:\n")
+		fmt.Fprintf(os.Stderr, "1. Configuration file:\n")
+		fmt.Fprintf(os.Stderr, "   -config <path> or default locations:\n")
+		fmt.Fprintf(os.Stderr, "   .dr-charm.yaml, ~/.dr-charm/config.yaml, ~/.config/dr-charm/config.yaml\n\n")
+		fmt.Fprintf(os.Stderr, "2. Environment variables:\n")
+		fmt.Fprintf(os.Stderr, "   DR_ACCOUNT=<name> DR_PASSWORD=<pass> DR_CHARACTER=<name>\n\n")
+		fmt.Fprintf(os.Stderr, "3. Command-line flags:\n")
+		fmt.Fprintf(os.Stderr, "   -account <name> -password <pass> -character <name>\n")
+		os.Exit(1)
 	}
 
 	fmt.Println("DragonRealms Authentication Test")
 	fmt.Println("================================")
-
 
 	// Connect to auth server
 	conn, err := net.DialTimeout("tcp", "eaccess.play.net:7900", 30*time.Second)
@@ -92,18 +141,18 @@ func main() {
 	fmt.Printf("Got hash: %s\n", hash)
 
 	// Encrypt password
-	encrypted := encryptPassword(password, hash)
+	encrypted := encryptPassword(cfg.Password, hash)
 	fmt.Printf("Encrypted password: %s\n", encrypted)
 
 	// Send account and encrypted password - Outlander sends raw bytes, not hex!
-	encryptedBytes := encryptPasswordBytes(password, hash)
+	encryptedBytes := encryptPasswordBytes(cfg.Password, hash)
 
 	// Build auth message
-	authMsg := []byte("A\t" + strings.ToUpper(account) + "\t")
+	authMsg := []byte("A\t" + strings.ToUpper(cfg.Account) + "\t")
 	authMsg = append(authMsg, encryptedBytes...)
 	authMsg = append(authMsg, '\n')
 
-	fmt.Printf("Sending auth for account: %s\n", strings.ToUpper(account))
+	fmt.Printf("Sending auth for account: %s\n", strings.ToUpper(cfg.Account))
 	_, err = conn.Write(authMsg)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to send auth: %v", err))
@@ -188,17 +237,17 @@ func main() {
 		if len(parts) >= 7 {
 			// Character name is in the last field (index 6)
 			charName := strings.TrimSpace(parts[6])
-			if strings.EqualFold(charName, character) {
+			if strings.EqualFold(charName, cfg.Character) {
 				// Character ID is in field 5
 				charID = parts[5]
-				fmt.Printf("Found character: %s with ID: %s\n", character, charID)
+				fmt.Printf("Found character: %s with ID: %s\n", cfg.Character, charID)
 				break
 			}
 		}
 	}
 
 	if charID == "" {
-		panic(fmt.Sprintf("Character '%s' not found", character))
+		panic(fmt.Sprintf("Character '%s' not found", cfg.Character))
 	}
 
 	fmt.Printf("Found character ID: %s\n", charID)
@@ -280,12 +329,12 @@ func main() {
 	fmt.Println("\n=== Connected to DragonRealms ===")
 
 	// Create game client
-	gameClient := game.NewGameClient(gameConn, character)
+	gameClient := game.NewGameClient(gameConn, cfg.Character)
 
 	// Start MCP HTTP server for commands if requested
-	if *mcpHTTP {
-		fmt.Printf("Starting MCP HTTP server on port %d...\n", *mcpHTTPPort)
-		mcpHTTPServer := mcp.NewMCPHTTPServer(gameClient, *mcpHTTPPort)
+	if cfg.MCPSettings.HTTPEnabled {
+		fmt.Printf("Starting MCP HTTP server on port %d...\n", cfg.MCPSettings.HTTPPort)
+		mcpHTTPServer := mcp.NewMCPHTTPServer(gameClient, cfg.MCPSettings.HTTPPort)
 
 		// Run HTTP server in background
 		go func() {
@@ -296,9 +345,9 @@ func main() {
 	}
 
 	// Start MCP SSE server for events if requested
-	if *mcpSSE {
-		fmt.Printf("Starting MCP SSE server on port %d...\n", *mcpSSEPort)
-		mcpSSEServer := mcp.NewMCPSSEServer(gameClient, *mcpSSEPort)
+	if cfg.MCPSettings.SSEEnabled {
+		fmt.Printf("Starting MCP SSE server on port %d...\n", cfg.MCPSettings.SSEPort)
+		mcpSSEServer := mcp.NewMCPSSEServer(gameClient, cfg.MCPSettings.SSEPort)
 
 		// Connect SSE event channel to game client
 		gameClient.SetMCPEventChannel(mcpSSEServer.GetEventChannel())

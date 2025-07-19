@@ -40,3 +40,10 @@ test_commands.txt
 
 # Temporary files
 tmp/
+
+# Config files with credentials
+.dr-charm.yaml
+config.yaml
+*.config.yaml
+# But not the example
+!config.example.yaml
