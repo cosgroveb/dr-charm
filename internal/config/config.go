@@ -13,14 +13,6 @@ type Config struct {
 	Account   string `yaml:"account"`
 	Password  string `yaml:"password"`
 	Character string `yaml:"character"`
-
-	// MCP settings
-	MCPSettings struct {
-		HTTPEnabled bool `yaml:"http_enabled"`
-		HTTPPort    int  `yaml:"http_port"`
-		SSEEnabled  bool `yaml:"sse_enabled"`
-		SSEPort     int  `yaml:"sse_port"`
-	} `yaml:"mcp"`
 }
 
 // LoadFromFile loads configuration from a YAML file
@@ -96,16 +88,4 @@ func (c *Config) Merge(other *Config) {
 	if other.Character != "" {
 		c.Character = other.Character
 	}
-
-	// Don't merge MCP settings if they're at defaults
-	if other.MCPSettings.HTTPPort != 0 {
-		c.MCPSettings.HTTPPort = other.MCPSettings.HTTPPort
-	}
-	if other.MCPSettings.SSEPort != 0 {
-		c.MCPSettings.SSEPort = other.MCPSettings.SSEPort
-	}
-	// For booleans, we can't distinguish between false and unset,
-	// so we always take the value from other
-	c.MCPSettings.HTTPEnabled = other.MCPSettings.HTTPEnabled || c.MCPSettings.HTTPEnabled
-	c.MCPSettings.SSEEnabled = other.MCPSettings.SSEEnabled || c.MCPSettings.SSEEnabled
 }

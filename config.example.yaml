@@ -1,8 +1,3 @@
 account: your_account_name
 password: your_password
 character: your_character_name
-mcp:
-  http_enabled: false
-  http_port: 8080
-  sse_enabled: false
-  sse_port: 8081

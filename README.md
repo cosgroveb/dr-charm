@@ -31,7 +31,6 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 
 ### Utility Features ✅
 - **Session logging** - Save sessions to ~/.dr-charm/logs/
-- **MCP Integration** - Model Context Protocol support for Claude
 - **Custom themes** - Create your own in ~/.dr-charm/themes/
 - **Configurable triggers** - Add custom text highlights
 
@@ -46,9 +45,6 @@ A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea fram
 
 # Using environment variables
 DR_ACCOUNT=<username> DR_PASSWORD=<password> DR_CHARACTER=<name> ./dr-charm
-
-# With MCP servers enabled
-./dr-charm -config config.yaml -mcp-http -mcp-sse
 ```
 
 The client starts with the enhanced multi-pane UI by default. Press F2 to toggle to single-pane mode.
@@ -75,10 +71,6 @@ See `config.example.yaml` for the configuration file format.
 
 **Optional settings:**
 - `-config` - Path to configuration file
-- `-mcp-http` - Enable MCP HTTP server for commands
-- `-mcp-http-port` - Custom port for MCP HTTP server (default: 8080)
-- `-mcp-sse` - Enable MCP SSE server for events
-- `-mcp-sse-port` - Custom port for MCP SSE server (default: 8081)
 
 ## Building
 
@@ -136,19 +128,6 @@ go build -o dr-charm ./cmd/dr-charm
 - `ki` → `kill`
 - `sk` → `skin`
 - `loot` → `loot all`
-
-## MCP Integration
-
-The client supports Model Context Protocol (MCP) for integration with Claude and other AI assistants. Enable MCP servers with the `-mcp-http` and `-mcp-sse` flags.
-
-### MCP Tools Available:
-- `send_command` - Send any command to the game
-- `social_say` - Say something in the game
-- `social_whisper` - Whisper to someone
-- `get_social_events` - Get recent social interactions
-- `get_connection_status` - Check connection health
-
-For Claude integration, add the project's `.mcp.json` configuration to your Claude settings.
 
 ## Configuration
 

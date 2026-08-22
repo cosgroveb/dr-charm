@@ -22,7 +22,6 @@ type GameClient struct {
 	connected     atomic.Bool
 	character     string
 	socialBuffer  *social.SocialEventBuffer
-	mcpEventChan  chan<- *social.SocialEvent // Channel to send events to MCP server
 	lastActivity  time.Time
 	activityMu    sync.RWMutex
 	reconnectChan chan bool // Channel to trigger reconnection attempts
@@ -77,19 +76,6 @@ func (gc *GameClient) SendCommand(command string) error {
 	_, err := gc.gameConn.Write([]byte(command + "\n"))
 	if err != nil {
 		gc.connected.Store(false)
-		// Notify MCP about disconnection
-		if gc.mcpEventChan != nil {
-			event := &social.SocialEvent{
-				Type:      "system",
-				Subtype:   "connection_lost",
-				Timestamp: time.Now().Unix(),
-				Raw:       fmt.Sprintf("Connection lost: %v", err),
-			}
-			select {
-			case gc.mcpEventChan <- event:
-			default:
-			}
-		}
 		return err
 	}
 
@@ -120,28 +106,13 @@ func (gc *GameClient) GetSocialBuffer() *social.SocialEventBuffer {
 	return gc.socialBuffer
 }
 
-// SetMCPEventChannel sets the channel for sending events to MCP
-func (gc *GameClient) SetMCPEventChannel(ch chan<- *social.SocialEvent) {
-	gc.mcpEventChan = ch
-}
-
-// AddSocialEvent adds a social event to the buffer and sends to MCP if connected
+// AddSocialEvent adds a social event to the buffer
 func (gc *GameClient) AddSocialEvent(event *social.SocialEvent) {
 	// Add to buffer
 	gc.socialBuffer.Add(event)
 
 	// Debug log to stderr
 	fmt.Fprintf(os.Stderr, "[GameClient] Added social event: %s from %s\n", event.Subtype, event.From)
-
-	// Send to MCP if channel is set
-	if gc.mcpEventChan != nil {
-		select {
-		case gc.mcpEventChan <- event:
-			// Sent successfully
-		default:
-			// Channel full or closed, skip
-		}
-	}
 }
 
 // monitorConnection monitors the connection health
@@ -162,20 +133,6 @@ func (gc *GameClient) monitorConnection() {
 				if gc.connected.Load() {
 					gc.connected.Store(false)
 					fmt.Fprintf(os.Stderr, "[GameClient] Connection appears to be dead (no activity for 60s)\n")
-
-					// Notify MCP about disconnection
-					if gc.mcpEventChan != nil {
-						event := &social.SocialEvent{
-							Type:      "system",
-							Subtype:   "connection_lost",
-							Timestamp: time.Now().Unix(),
-							Raw:       "Connection to game server lost",
-						}
-						select {
-						case gc.mcpEventChan <- event:
-						default:
-						}
-					}
 				}
 			}
 		case <-gc.reconnectChan:

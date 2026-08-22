@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 
 	"dr-charm/internal/config"
 	"dr-charm/internal/game"
-	"dr-charm/internal/mcp"
 	"dr-charm/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,10 +23,6 @@ func main() {
 	accountFlag := flag.String("account", "", "DragonRealms account name")
 	passwordFlag := flag.String("password", "", "DragonRealms account password")
 	characterFlag := flag.String("character", "", "Character name to play")
-	mcpHTTP := flag.Bool("mcp-http", false, "Enable MCP HTTP server for commands")
-	mcpHTTPPort := flag.Int("mcp-http-port", 0, "Port for MCP HTTP server")
-	mcpSSE := flag.Bool("mcp-sse", false, "Enable MCP SSE server for events")
-	mcpSSEPort := flag.Int("mcp-sse-port", 0, "Port for MCP SSE server")
 	flag.Parse()
 
 	// Start with empty config
@@ -73,31 +67,7 @@ func main() {
 		Password:  *passwordFlag,
 		Character: *characterFlag,
 	}
-	flagCfg.MCPSettings.HTTPEnabled = *mcpHTTP
-	flagCfg.MCPSettings.SSEEnabled = *mcpSSE
-	if *mcpHTTPPort != 0 {
-		flagCfg.MCPSettings.HTTPPort = *mcpHTTPPort
-	}
-	if *mcpSSEPort != 0 {
-		flagCfg.MCPSettings.SSEPort = *mcpSSEPort
-	}
 	cfg.Merge(flagCfg)
-
-	// Set defaults for ports if not specified
-	if cfg.MCPSettings.HTTPPort == 0 {
-		cfg.MCPSettings.HTTPPort = 8080
-	}
-	if cfg.MCPSettings.SSEPort == 0 {
-		cfg.MCPSettings.SSEPort = 8081
-	}
-
-	// Check environment variables for MCP flags (legacy support)
-	if !cfg.MCPSettings.HTTPEnabled && os.Getenv("DR_CHARM_MCP_HTTP") == "true" {
-		cfg.MCPSettings.HTTPEnabled = true
-	}
-	if !cfg.MCPSettings.SSEEnabled && os.Getenv("DR_CHARM_MCP_SSE") == "true" {
-		cfg.MCPSettings.SSEEnabled = true
-	}
 
 	// Validate required credentials
 	if cfg.Account == "" || cfg.Password == "" || cfg.Character == "" {
@@ -330,35 +300,6 @@ func main() {
 
 	// Create game client
 	gameClient := game.NewGameClient(gameConn, cfg.Character)
-
-	// Start MCP HTTP server for commands if requested
-	if cfg.MCPSettings.HTTPEnabled {
-		fmt.Printf("Starting MCP HTTP server on port %d...\n", cfg.MCPSettings.HTTPPort)
-		mcpHTTPServer := mcp.NewMCPHTTPServer(gameClient, cfg.MCPSettings.HTTPPort)
-
-		// Run HTTP server in background
-		go func() {
-			if err := mcpHTTPServer.Start(); err != nil {
-				log.Printf("MCP HTTP server error: %v", err)
-			}
-		}()
-	}
-
-	// Start MCP SSE server for events if requested
-	if cfg.MCPSettings.SSEEnabled {
-		fmt.Printf("Starting MCP SSE server on port %d...\n", cfg.MCPSettings.SSEPort)
-		mcpSSEServer := mcp.NewMCPSSEServer(gameClient, cfg.MCPSettings.SSEPort)
-
-		// Connect SSE event channel to game client
-		gameClient.SetMCPEventChannel(mcpSSEServer.GetEventChannel())
-
-		// Run SSE server in background
-		go func() {
-			if err := mcpSSEServer.Start(); err != nil {
-				log.Printf("MCP SSE server error: %v", err)
-			}
-		}()
-	}
 
 	// Check for CLI mode
 	if os.Getenv("DR_CHARM_CLI") == "true" {
