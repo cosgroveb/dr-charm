@@ -1,5 +1,3 @@
-// Dagger module for dr-charm CI/CD pipeline
-
 package main
 
 import (
@@ -10,6 +8,8 @@ import (
 )
 
 type DrCharm struct{}
+
+const goImage = "golang:1.24.1-bookworm"
 
 // Build the dr-charm binary
 func (m *DrCharm) Build(
@@ -23,14 +23,14 @@ func (m *DrCharm) Build(
 
 	for _, platform := range platforms {
 		binary := dag.Container().
-			From("golang:1.23-alpine").
+			From(goImage).
 			WithMountedDirectory("/src", source).
 			WithWorkdir("/src").
 			WithEnvVariable("CGO_ENABLED", "0").
 			WithEnvVariable("GOOS", strings.Split(platform, "/")[0]).
 			WithEnvVariable("GOARCH", strings.Split(platform, "/")[1]).
 			WithExec([]string{"go", "mod", "download"}).
-			WithExec([]string{"go", "build", "-o", fmt.Sprintf("dr-charm-%s%s", strings.ReplaceAll(platform, "/", "-"), getExeSuffix(platform)), "."}).
+			WithExec([]string{"go", "build", "-o", fmt.Sprintf("dr-charm-%s%s", strings.ReplaceAll(platform, "/", "-"), getExeSuffix(platform)), "./cmd/dr-charm"}).
 			File(fmt.Sprintf("/src/dr-charm-%s%s", strings.ReplaceAll(platform, "/", "-"), getExeSuffix(platform)))
 
 		builds = append(builds, binary)
@@ -42,11 +42,11 @@ func (m *DrCharm) Build(
 // Test runs the Go tests
 func (m *DrCharm) Test(ctx context.Context, source *dagger.Directory) error {
 	_, err := dag.Container().
-		From("golang:1.23-alpine").
+		From(goImage).
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
 		WithExec([]string{"go", "mod", "download"}).
-		WithExec([]string{"go", "test", "-v", "./..."}).
+		WithExec([]string{"go", "test", "-race", "-shuffle=on", "./..."}).
 		Stdout(ctx)
 
 	return err
@@ -56,7 +56,7 @@ func (m *DrCharm) Test(ctx context.Context, source *dagger.Directory) error {
 func (m *DrCharm) Lint(ctx context.Context, source *dagger.Directory) error {
 	// Run go fmt check
 	fmtOut, err := dag.Container().
-		From("golang:1.23-alpine").
+		From(goImage).
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
 		WithExec([]string{"sh", "-c", "gofmt -l ."}).
@@ -72,7 +72,7 @@ func (m *DrCharm) Lint(ctx context.Context, source *dagger.Directory) error {
 
 	// Run go vet
 	_, err = dag.Container().
-		From("golang:1.23-alpine").
+		From(goImage).
 		WithMountedDirectory("/src", source).
 		WithWorkdir("/src").
 		WithExec([]string{"go", "mod", "download"}).
@@ -150,7 +150,7 @@ func (m *DrCharm) Release(
 			"/tmp/dr-charm-darwin-amd64",
 			"/tmp/dr-charm-darwin-arm64",
 			"/tmp/dr-charm-windows-amd64.exe",
-			"--title", fmt.Sprintf("DragonRealms Charm CLI %s", version),
+			"--title", fmt.Sprintf("DragonRealms Charm %s", version),
 			"--notes", "DragonRealms client with Charm UI",
 		}).
 		Stdout(ctx)

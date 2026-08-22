@@ -19,7 +19,7 @@ go.work.sum
 .env
 
 # Build output
-dr-charm
+/dr-charm
 
 # IDE specific files
 .idea/

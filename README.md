@@ -1,163 +1,124 @@
-# DragonRealms Charm CLI
+# dr-charm
 
-A feature-rich DragonRealms MUD client built with Go and Charm's Bubble Tea framework.
+`dr-charm` is a personal terminal client for DragonRealms. It authenticates
+through the Simutronics Game Entry service, connects to the DragonRealms game
+socket, decodes the StormFront XML stream, and renders a Bubble Tea interface.
 
-## Features
+The client is intentionally DragonRealms-specific. It is under active
+development and is built from source.
 
-### Core Features ✅
-- Secure authentication to eaccess.play.net
-- Full DragonRealms XML protocol support
-- Beautiful terminal UI with Charm's Bubble Tea
-- Real-time game output with ANSI color support
-- Command history with up/down navigation
-- Automatic "look" command on connection
+## Build and run
 
-### UI Features ✅
-- **Multi-pane layout (default)** - Separate windows for game, room, hands, and familiar
-- **Single-pane mode** - Toggle with F2 for a simplified view
-- **Scrollback buffer** - Page Up/Down, Home/End navigation
-- **Status bar** - Health, mana, stamina, concentration, spirit
-- **Room tracking** - Current room name in title bar
-- **Vitals display** - All character vitals with color coding
-- **Theme support** - Multiple color themes (F3 to switch)
+Requirements:
 
-### Game Features ✅
-- **Triggers and highlights** - Combat, whispers, arrivals/departures
-- **Command aliases** - Short commands (n→north, l→look, etc.)
-- **Hands tracking** - What you're holding in each hand
-- **Room window** - Exits, objects, and other players
-- **Familiar window** - Companion messages and status
-- **Spell tracking** - Currently prepared spell
+- Go 1.24.1 or a Go installation that honors the module toolchain directive
+- A DragonRealms account and character
 
-### Utility Features ✅
-- **Session logging** - Save sessions to ~/.dr-charm/logs/
-- **Custom themes** - Create your own in ~/.dr-charm/themes/
-- **Configurable triggers** - Add custom text highlights
+Create a private configuration file:
 
-## Usage
-
-```bash
-# Using a configuration file
-./dr-charm -config ~/.dr-charm/config.yaml
-
-# Using command-line flags
-./dr-charm -account <username> -password <password> -character <name>
-
-# Using environment variables
-DR_ACCOUNT=<username> DR_PASSWORD=<password> DR_CHARACTER=<name> ./dr-charm
+```sh
+mkdir -p ~/.config/dr-charm
+cp config.example.yaml ~/.config/dr-charm/config.yaml
+chmod 600 ~/.config/dr-charm/config.yaml
 ```
 
-The client starts with the enhanced multi-pane UI by default. Press F2 to toggle to single-pane mode.
+Replace the placeholders in that file, then build and run:
 
-### Configuration Options
-
-Configuration is loaded in this order (later sources override earlier ones):
-1. Configuration file (if specified or found in default locations)
-2. Environment variables
-3. Command-line flags
-
-**Configuration file locations** (checked in order):
-- Path specified with `-config` flag
-- `.dr-charm.yaml` in current directory
-- `~/.dr-charm/config.yaml`
-- `~/.config/dr-charm/config.yaml`
-
-See `config.example.yaml` for the configuration file format.
-
-**Required credentials** (must be provided via config file, env vars, or flags):
-- `account` / `DR_ACCOUNT` / `-account` - DragonRealms account name
-- `password` / `DR_PASSWORD` / `-password` - Account password  
-- `character` / `DR_CHARACTER` / `-character` - Character name to play
-
-**Optional settings:**
-- `-config` - Path to configuration file
-
-## Building
-
-```bash
+```sh
 make build
-# or
-go build -o dr-charm ./cmd/dr-charm
+./dr-charm
 ```
 
-## Keyboard Shortcuts
+Use another configuration file with `-config`:
 
-### General
-- **Enter** - Send command
-- **Up/Down** - Command history
-- **Backspace** - Delete character
-- **Ctrl+C** - Quit
+```sh
+./dr-charm -config /path/to/config.yaml
+```
 
-### Navigation
-- **F1** - Show help
-- **F2** - Toggle multi/single-pane view
-- **F3** - Theme selector
-- **F4** - Toggle logging
-- **F5** - Show performance stats
-- **Tab** - Cycle through panes (multi-pane mode)
-
-### Scrolling
-- **Page Up/Down** - Scroll by page
-- **Home/End** - Jump to top/bottom
-
-## Command Aliases
-
-### Movement
-- `n` → `north`
-- `s` → `south`
-- `e` → `east`
-- `w` → `west`
-- `ne` → `northeast`
-- `nw` → `northwest`
-- `se` → `southeast`
-- `sw` → `southwest`
-- `u` → `up`
-- `d` → `down`
-- `o` → `out`
-
-### Common Commands
-- `l` → `look`
-- `i` → `inventory`
-- `sta` → `stand`
-- `sit` → `sit`
-- `kne` → `kneel`
-- `hi` → `hide`
-
-### Combat
-- `att` → `attack`
-- `ki` → `kill`
-- `sk` → `skin`
-- `loot` → `loot all`
+Credential flags are not supported. This keeps passwords out of shell history
+and process listings.
 
 ## Configuration
 
-### Themes
-Custom themes can be created in `~/.dr-charm/themes/` as YAML files. See the built-in themes for examples.
+All three fields are required:
 
-### Logs
-Session logs are saved to `~/.dr-charm/logs/` with timestamps. Logs include all game output and commands.
+```yaml
+account: your_account_name
+password: your_password
+character: your_character_name
+```
+
+Configuration precedence is:
+
+1. The path passed to `-config`, when present.
+2. Otherwise, the first existing file among `.dr-charm.yaml`,
+   `~/.dr-charm/config.yaml`, and `~/.config/dr-charm/config.yaml`.
+3. Nonempty `DR_ACCOUNT`, `DR_PASSWORD`, and `DR_CHARACTER` values override
+   file values.
+
+An explicit file error stops startup. An unreadable or invalid default file
+also stops startup instead of falling through to a later file.
+
+## Interface
+
+The default view has game, room, hands, and familiar panes. The status bar
+shows health, mana, fatigue, concentration, spirit, and posture. Common command
+aliases such as `l` for `look` and `n` for `north` are expanded before sending.
+
+Keys:
+
+- `Enter`: send command
+- `Up` and `Down`: command history
+- `Page Up`, `Page Down`, `Home`, and `End`: scroll output
+- `Tab`: cycle panes
+- `F1`: help
+- `F2`: switch between multi-pane and single-pane views
+- `F3`: choose a theme
+- `F4`: toggle session logging
+- `Ctrl+C`: quit
+
+Logs are written under `~/.dr-charm/logs/`. They contain game output and player
+commands, so protect them like other account data. Custom themes are JSON files
+under `~/.dr-charm/themes/`.
+
+## Architecture
+
+`internal/dragonrealms.Session` owns authentication, the game connection,
+command serialization, reconnect behavior, XML decoding, and canonical game
+state. It publishes detached `Update` values containing a semantic `Snapshot`
+and display events. The UI consumes those values and sends player commands
+through `Session.Send`; it does not read sockets or parse XML.
+
+`cmd/dr-charm` only loads configuration, creates the session and UI, and runs
+Bubble Tea. Aliases, highlighting, themes, and logging remain UI concerns.
 
 ## Development
 
-### Running Tests
-```bash
-go test ./...
+Run local checks:
+
+```sh
+gofmt -l .
+go vet ./...
+go test -race -shuffle=on ./...
+go build -o /tmp/dr-charm ./cmd/dr-charm
 ```
 
-### CI/CD with Dagger
-```bash
-# Run full CI pipeline
+The protocol integration test uses loopback TCP servers and runs with the normal
+suite. The live test is opt-in and uses real DragonRealms services. It never
+falls back to a fake or skips when selected:
+
+```sh
+DR_E2E_CONFIG=/path/to/config.yaml \
+  go test -tags=e2e ./cmd/dr-charm \
+  -run TestDragonRealmsEndToEnd -count=1 -timeout=60s
+```
+
+Dagger exposes the same CI stages:
+
+```sh
 dagger call ci --source .
-
-# Run individual tasks
-dagger call lint --source .
-dagger call test --source .
-dagger call build --source .
 ```
 
-## Contributing
+## License
 
-Pull requests are welcome! Please ensure:
-1. Code passes linting (`gofmt`)
-2. Tests pass (when added)
-3. Dagger CI pipeline is green
+Licensed under the [Apache License 2.0](LICENSE).
