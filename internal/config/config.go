@@ -4,88 +4,119 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds all configuration settings
+// Config contains the credentials for one DragonRealms character.
 type Config struct {
 	Account   string `yaml:"account"`
 	Password  string `yaml:"password"`
 	Character string `yaml:"character"`
 }
 
-// LoadFromFile loads configuration from a YAML file
-func LoadFromFile(path string) (*Config, error) {
-	// Expand ~ to home directory
-	if len(path) >= 2 && path[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get home directory: %w", err)
-		}
-		path = filepath.Join(home, path[2:])
-	}
-
-	// Check if file exists
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file not found: %s", path)
-	}
-
-	// Read the file
-	data, err := os.ReadFile(path)
+// Load applies config-file discovery, environment overrides, and validation.
+func Load(explicitPath string) (*Config, error) {
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, fmt.Errorf("find home directory: %w", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("find working directory: %w", err)
+	}
+	return load(explicitPath, cwd, home, os.Getenv)
+}
+
+func load(explicitPath, cwd, home string, getenv func(string) string) (*Config, error) {
+	cfg := &Config{}
+	if explicitPath != "" {
+		loaded, err := LoadFromFile(explicitPath)
+		if err != nil {
+			return nil, err
+		}
+		cfg = loaded
+	} else {
+		paths := []string{
+			filepath.Join(cwd, ".dr-charm.yaml"),
+			filepath.Join(home, ".dr-charm", "config.yaml"),
+			filepath.Join(home, ".config", "dr-charm", "config.yaml"),
+		}
+		for _, path := range paths {
+			_, err := os.Stat(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, fmt.Errorf("inspect config file %s: %w", path, err)
+			}
+			loaded, err := LoadFromFile(path)
+			if err != nil {
+				return nil, err
+			}
+			cfg = loaded
+			break
+		}
 	}
 
-	// Parse YAML
+	for key, target := range map[string]*string{
+		"DR_ACCOUNT":   &cfg.Account,
+		"DR_PASSWORD":  &cfg.Password,
+		"DR_CHARACTER": &cfg.Character,
+	} {
+		if value := getenv(key); value != "" {
+			*target = value
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// LoadFromFile reads one YAML configuration file.
+func LoadFromFile(path string) (*Config, error) {
+	expanded, err := expandHome(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(expanded)
+	if err != nil {
+		return nil, fmt.Errorf("read config file %s: %w", expanded, err)
+	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, fmt.Errorf("parse config file %s: %w", expanded, err)
 	}
-
 	return &cfg, nil
 }
 
-// SaveToFile saves configuration to a YAML file
-func (c *Config) SaveToFile(path string) error {
-	// Expand ~ to home directory
-	if len(path) >= 2 && path[:2] == "~/" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return fmt.Errorf("failed to get home directory: %w", err)
-		}
-		path = filepath.Join(home, path[2:])
+// Validate reports missing credential fields without including their values.
+func (c Config) Validate() error {
+	var missing []string
+	if c.Account == "" {
+		missing = append(missing, "account")
 	}
-
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
+	if c.Password == "" {
+		missing = append(missing, "password")
 	}
-
-	// Marshal to YAML
-	data, err := yaml.Marshal(c)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+	if c.Character == "" {
+		missing = append(missing, "character")
 	}
-
-	// Write to file
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required config fields: %s", strings.Join(missing, ", "))
 	}
-
 	return nil
 }
 
-// Merge merges another config into this one, with other taking precedence
-func (c *Config) Merge(other *Config) {
-	if other.Account != "" {
-		c.Account = other.Account
+func expandHome(path string) (string, error) {
+	if !strings.HasPrefix(path, "~/") {
+		return path, nil
 	}
-	if other.Password != "" {
-		c.Password = other.Password
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find home directory: %w", err)
 	}
-	if other.Character != "" {
-		c.Character = other.Character
-	}
+	return filepath.Join(home, path[2:]), nil
 }

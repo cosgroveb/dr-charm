@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"dr-charm/internal/game"
+	"dr-charm/internal/dragonrealms"
 )
 
 // Pane represents a window pane in the layout
@@ -27,16 +27,14 @@ type Layout struct {
 	height      int
 	activePane  string
 	borderStyle lipgloss.Style
-	debug       bool
 }
 
 // NewLayout creates a new layout manager
-func NewLayout(width, height int, debug bool) *Layout {
+func NewLayout(width, height int) *Layout {
 	l := &Layout{
 		panes:  make(map[string]*Pane),
 		width:  width,
 		height: height,
-		debug:  debug,
 		borderStyle: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("62")),
@@ -384,36 +382,21 @@ func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
 	return strings.Join(lines, "\n")
 }
 
-// UpdateFromGameState updates panes based on game state
-func (l *Layout) UpdateFromGameState(state *game.GameState) {
-	// Debug output
-	if l.debug {
-		fmt.Printf("[DEBUG] UpdateFromGameState - Title: '%s', Desc: '%s', Exits: %v, Objects: %v\n",
-			state.Room.Title, state.Room.Description, state.Room.Exits, state.Room.Objects)
-	}
-
-	// Update room pane
+// UpdateFromSnapshot renders canonical Session state in the room and hands panes.
+func (l *Layout) UpdateFromSnapshot(snapshot dragonrealms.Snapshot) {
 	var roomContent []string
-	if state.Room.Title != "" {
-		roomContent = append(roomContent, state.Room.Title)
+	if snapshot.Room.Title != "" {
+		roomContent = append(roomContent, snapshot.Room.Title)
 		roomContent = append(roomContent, "")
 	}
-	if state.Room.Description != "" {
-		// Split long descriptions into paragraphs for better readability
-		desc := strings.TrimSpace(state.Room.Description)
+	if snapshot.Room.Description != "" {
+		desc := strings.TrimSpace(snapshot.Room.Description)
 		roomContent = append(roomContent, desc)
 		roomContent = append(roomContent, "")
 	}
-	if state.Room.ExitsString != "" {
-		// Clean up the exits string - remove empty entries
-		exits := strings.TrimSpace(state.Room.ExitsString)
-		if exits != "" && exits != "." && exits != ", , ." {
-			roomContent = append(roomContent, "Exits: "+exits)
-		}
-	} else if len(state.Room.Exits) > 0 {
-		// Filter out empty exits
+	if len(snapshot.Room.Exits) > 0 {
 		var validExits []string
-		for _, exit := range state.Room.Exits {
+		for _, exit := range snapshot.Room.Exits {
 			if exit != "" {
 				validExits = append(validExits, exit)
 			}
@@ -422,38 +405,36 @@ func (l *Layout) UpdateFromGameState(state *game.GameState) {
 			roomContent = append(roomContent, "Exits: "+strings.Join(validExits, ", "))
 		}
 	}
-	if len(state.Room.Objects) > 0 {
+	if len(snapshot.Room.Objects) > 0 {
 		roomContent = append(roomContent, "")
 		roomContent = append(roomContent, "You also see:")
-		for _, obj := range state.Room.Objects {
+		for _, obj := range snapshot.Room.Objects {
 			roomContent = append(roomContent, "  "+obj)
 		}
 	}
-	if len(state.Room.Players) > 0 {
+	if len(snapshot.Room.Players) > 0 {
 		roomContent = append(roomContent, "")
 		roomContent = append(roomContent, "Also here:")
-		for _, player := range state.Room.Players {
+		for _, player := range snapshot.Room.Players {
 			roomContent = append(roomContent, "  "+player)
 		}
 	}
-	// fmt.Printf("[DEBUG] Updating room pane with %d lines\n", len(roomContent))
-	// if len(roomContent) > 0 {
-	//     fmt.Printf("[DEBUG] First line: %s\n", roomContent[0])
-	// }
+	if len(snapshot.Room.Creatures) > 0 {
+		roomContent = append(roomContent, "")
+		roomContent = append(roomContent, "Creatures:")
+		for _, creature := range snapshot.Room.Creatures {
+			roomContent = append(roomContent, "  "+creature)
+		}
+	}
 	l.UpdatePane("room", roomContent)
 
-	// Update hands pane
-	var handsContent []string
-	handsContent = append(handsContent, fmt.Sprintf("Right: %s", state.RightHand))
-	handsContent = append(handsContent, fmt.Sprintf("Left: %s", state.LeftHand))
-	if state.Spell != "" {
+	handsContent := []string{
+		fmt.Sprintf("Right: %s", snapshot.Hands.Right),
+		fmt.Sprintf("Left: %s", snapshot.Hands.Left),
+	}
+	if snapshot.PreparedSpell != "" {
 		handsContent = append(handsContent, "")
-		handsContent = append(handsContent, fmt.Sprintf("Spell: %s", state.Spell))
+		handsContent = append(handsContent, fmt.Sprintf("Spell: %s", snapshot.PreparedSpell))
 	}
 	l.UpdatePane("hands", handsContent)
-
-	// Update familiar pane if there's content
-	if state.FamiliarWindow != "" {
-		l.UpdatePane("familiar", strings.Split(state.FamiliarWindow, "\n"))
-	}
 }

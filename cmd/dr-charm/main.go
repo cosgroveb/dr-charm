@@ -1,436 +1,68 @@
 package main
 
 import (
-	"bufio"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"time"
+	"os/signal"
+	"syscall"
 
 	"dr-charm/internal/config"
-	"dr-charm/internal/game"
+	"dr-charm/internal/dragonrealms"
 	"dr-charm/internal/ui"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
-	// Parse command line flags
-	configFile := flag.String("config", "", "Path to configuration file")
-	accountFlag := flag.String("account", "", "DragonRealms account name")
-	passwordFlag := flag.String("password", "", "DragonRealms account password")
-	characterFlag := flag.String("character", "", "Character name to play")
-	flag.Parse()
-
-	// Start with empty config
-	cfg := &config.Config{}
-
-	// Load from config file if specified
-	if *configFile != "" {
-		fileCfg, err := config.LoadFromFile(*configFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading config file: %v\n", err)
-			os.Exit(1)
-		}
-		cfg = fileCfg
-	} else {
-		// Try default locations
-		home, _ := os.UserHomeDir()
-		defaultPaths := []string{
-			".dr-charm.yaml",
-			filepath.Join(home, ".dr-charm", "config.yaml"),
-			filepath.Join(home, ".config", "dr-charm", "config.yaml"),
-		}
-
-		for _, path := range defaultPaths {
-			if fileCfg, err := config.LoadFromFile(path); err == nil {
-				cfg = fileCfg
-				break
-			}
-		}
-	}
-
-	// Override with environment variables
-	envCfg := &config.Config{
-		Account:   os.Getenv("DR_ACCOUNT"),
-		Password:  os.Getenv("DR_PASSWORD"),
-		Character: os.Getenv("DR_CHARACTER"),
-	}
-	cfg.Merge(envCfg)
-
-	// Override with command line flags
-	flagCfg := &config.Config{
-		Account:   *accountFlag,
-		Password:  *passwordFlag,
-		Character: *characterFlag,
-	}
-	cfg.Merge(flagCfg)
-
-	// Validate required credentials
-	if cfg.Account == "" || cfg.Password == "" || cfg.Character == "" {
-		fmt.Fprintf(os.Stderr, "Error: Missing required credentials\n\n")
-		fmt.Fprintf(os.Stderr, "Please provide credentials using one of:\n")
-		fmt.Fprintf(os.Stderr, "1. Configuration file:\n")
-		fmt.Fprintf(os.Stderr, "   -config <path> or default locations:\n")
-		fmt.Fprintf(os.Stderr, "   .dr-charm.yaml, ~/.dr-charm/config.yaml, ~/.config/dr-charm/config.yaml\n\n")
-		fmt.Fprintf(os.Stderr, "2. Environment variables:\n")
-		fmt.Fprintf(os.Stderr, "   DR_ACCOUNT=<name> DR_PASSWORD=<pass> DR_CHARACTER=<name>\n\n")
-		fmt.Fprintf(os.Stderr, "3. Command-line flags:\n")
-		fmt.Fprintf(os.Stderr, "   -account <name> -password <pass> -character <name>\n")
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "dr-charm: %v\n", err)
 		os.Exit(1)
 	}
-
-	fmt.Println("DragonRealms Authentication Test")
-	fmt.Println("================================")
-
-	// Connect to auth server
-	conn, err := net.DialTimeout("tcp", "eaccess.play.net:7900", 30*time.Second)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to connect: %v", err))
-	}
-	defer conn.Close()
-
-	reader := bufio.NewReader(conn)
-
-	// Send K to get hash
-	fmt.Println("Requesting hash...")
-	_, err = conn.Write([]byte("K\n"))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send K: %v", err))
-	}
-
-	// Read hash
-	hash, err := reader.ReadString('\n')
-	if err != nil {
-		panic(fmt.Sprintf("Failed to read hash: %v", err))
-	}
-	hash = strings.TrimSpace(hash)
-	fmt.Printf("Got hash: %s\n", hash)
-
-	// Encrypt password
-	encrypted := encryptPassword(cfg.Password, hash)
-	fmt.Printf("Encrypted password: %s\n", encrypted)
-
-	// Send account and encrypted password - Outlander sends raw bytes, not hex!
-	encryptedBytes := encryptPasswordBytes(cfg.Password, hash)
-
-	// Build auth message
-	authMsg := []byte("A\t" + strings.ToUpper(cfg.Account) + "\t")
-	authMsg = append(authMsg, encryptedBytes...)
-	authMsg = append(authMsg, '\n')
-
-	fmt.Printf("Sending auth for account: %s\n", strings.ToUpper(cfg.Account))
-	_, err = conn.Write(authMsg)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send auth: %v", err))
-	}
-
-	// Read auth response
-	authResp, err := reader.ReadString('\n')
-	if err != nil {
-		panic(fmt.Sprintf("Failed to read auth response: %v", err))
-	}
-	fmt.Printf("Auth response: %s", authResp)
-
-	// Debug: let's see raw bytes
-	fmt.Printf("Auth response bytes: %v\n", []byte(authResp))
-
-	if strings.Contains(authResp, "PASSWORD") {
-		panic("Invalid password")
-	}
-	if strings.Contains(authResp, "NORECORD") {
-		panic("Account not found")
-	}
-
-	// Send game selection
-	fmt.Println("Selecting game DR...")
-	_, err = conn.Write([]byte("G\tDR\n"))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send game: %v", err))
-	}
-
-	// Read game response
-	gameResp, err := reader.ReadString('\n')
-	if err != nil {
-		panic(fmt.Sprintf("Failed to read game response: %v", err))
-	}
-	fmt.Printf("Game response: %s", gameResp)
-
-	// Get character list
-	fmt.Println("Getting character list...")
-	_, err = conn.Write([]byte("C\n"))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send C: %v", err))
-	}
-
-	// Read character list response line by line
-	fmt.Println("Reading character list...")
-	var charLines []string
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				// Timeout reached, we have all the data
-				break
-			}
-			panic(fmt.Sprintf("Failed to read character list: %v", err))
-		}
-
-		line = strings.TrimSpace(line)
-		fmt.Printf("Character line: %s\n", line)
-		charLines = append(charLines, line)
-
-		// Character list ends with a line containing just 5 tab-separated zeros
-		if line == "C\t0\t0\t0\t0" {
-			break
-		}
-	}
-	// Reset deadline
-	conn.SetReadDeadline(time.Time{})
-
-	fmt.Printf("Total character lines: %d\n", len(charLines))
-
-	// Parse character list to find our character
-	var charID string
-	for _, line := range charLines {
-		// Skip the terminator line
-		if line == "C\t0\t0\t0\t0" {
-			continue
-		}
-
-		// Look for our character
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 7 {
-			// Character name is in the last field (index 6)
-			charName := strings.TrimSpace(parts[6])
-			if strings.EqualFold(charName, cfg.Character) {
-				// Character ID is in field 5
-				charID = parts[5]
-				fmt.Printf("Found character: %s with ID: %s\n", cfg.Character, charID)
-				break
-			}
-		}
-	}
-
-	if charID == "" {
-		panic(fmt.Sprintf("Character '%s' not found", cfg.Character))
-	}
-
-	fmt.Printf("Found character ID: %s\n", charID)
-
-	// Login with character
-	loginCmd := fmt.Sprintf("L\t%s\tPLAY\n", charID)
-	_, err = conn.Write([]byte(loginCmd))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send login: %v", err))
-	}
-
-	// Read login response and extract connection info
-	fmt.Println("Reading login response...")
-	var gameKey, gameHost, gamePort string
-	loginData := ""
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				// Timeout reached
-				break
-			}
-			panic(fmt.Sprintf("Failed to read login response: %v", err))
-		}
-
-		loginData += line
-		fmt.Printf("Login response line: %s", line)
-
-		// Extract connection info from the accumulated data
-		if strings.Contains(loginData, "KEY=") {
-			gameKey = extractValue(loginData, "KEY=(\\w+)")
-		}
-		if strings.Contains(loginData, "GAMEHOST=") {
-			gameHost = extractValue(loginData, "GAMEHOST=(\\S+)")
-		}
-		if strings.Contains(loginData, "GAMEPORT=") {
-			gamePort = extractValue(loginData, "GAMEPORT=(\\d+)")
-		}
-
-		// Check if we have all info
-		if gameKey != "" && gameHost != "" && gamePort != "" {
-			break
-		}
-	}
-	conn.SetReadDeadline(time.Time{})
-
-	fmt.Println("\n=== Game Connection Info ===")
-	fmt.Printf("Host: %s\n", gameHost)
-	fmt.Printf("Port: %s\n", gamePort)
-	fmt.Printf("Key: %s\n", gameKey)
-	fmt.Println("============================")
-
-	// Close auth connection
-	conn.Close()
-
-	// Connect to game server
-	fmt.Printf("\nConnecting to game server %s:%s...\n", gameHost, gamePort)
-	gameConn, err := net.DialTimeout("tcp", gameHost+":"+gamePort, 30*time.Second)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to connect to game server: %v", err))
-	}
-	defer gameConn.Close()
-
-	// Send key and client info
-	fmt.Println("Sending authentication key...")
-	_, err = gameConn.Write([]byte(gameKey + "\n"))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send key: %v", err))
-	}
-
-	// Send client identification (StormFront protocol)
-	clientID := "/FE:STORMFRONT /VERSION:1.0.26 /P:OSX /XML\n"
-	_, err = gameConn.Write([]byte(clientID))
-	if err != nil {
-		panic(fmt.Sprintf("Failed to send client ID: %v", err))
-	}
-
-	fmt.Println("\n=== Connected to DragonRealms ===")
-
-	// Create game client
-	gameClient := game.NewGameClient(gameConn, cfg.Character)
-
-	// Check for CLI mode
-	if os.Getenv("DR_CHARM_CLI") == "true" {
-		fmt.Println("Running in CLI mode for testing...")
-		ui.RunCLIMode(gameConn, gameClient)
-		return
-	}
-
-	fmt.Println("Launching UI...")
-
-	// Start Bubble Tea UI - Enhanced UI is now the default
-	fmt.Println("Starting enhanced UI with multi-pane support...")
-	p := tea.NewProgram(ui.InitialEnhancedModel(gameConn, gameClient), tea.WithAltScreen())
-
-	if _, err := p.Run(); err != nil {
-		panic(fmt.Sprintf("Failed to start UI: %v", err))
-	}
 }
 
-// encryptPassword implements DR's password encryption (hex string version)
-func encryptPassword(password, hash string) string {
-	maxLen := len(password)
-	if len(hash) < maxLen {
-		maxLen = len(hash)
+func run(args []string) error {
+	flags := flag.NewFlagSet("dr-charm", flag.ContinueOnError)
+	configPath := flags.String("config", "", "path to DragonRealms configuration file")
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
 	}
 
-	result := make([]byte, maxLen)
-	for i := 0; i < maxLen; i++ {
-		hashByte := hash[i]
-		passByte := password[i]
-		encrypted := ((hashByte ^ (passByte - 32)) + 32)
-		result[i] = encrypted
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Convert to hex string
-	hexStr := ""
-	for _, b := range result {
-		hexStr += fmt.Sprintf("%02X", b) // Fixed: use %02X for consistent hex
+	session, model, err := newApplication(ctx, *cfg)
+	if err != nil {
+		return err
 	}
+	defer session.Close()
 
-	return hexStr
+	program := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := program.Run(); err != nil {
+		return fmt.Errorf("run terminal UI: %w", err)
+	}
+	return nil
 }
 
-// encryptPasswordBytes implements DR's password encryption (raw bytes version)
-func encryptPasswordBytes(password, hash string) []byte {
-	maxLen := len(password)
-	if len(hash) < maxLen {
-		maxLen = len(hash)
+func newApplication(ctx context.Context, cfg config.Config) (*dragonrealms.Session, ui.EnhancedModel, error) {
+	session, err := dragonrealms.Dial(ctx, dragonrealms.Credentials{
+		Account:   cfg.Account,
+		Password:  cfg.Password,
+		Character: cfg.Character,
+	})
+	if err != nil {
+		return nil, ui.EnhancedModel{}, err
 	}
-
-	result := make([]byte, maxLen)
-	for i := 0; i < maxLen; i++ {
-		hashByte := hash[i]
-		passByte := password[i]
-		encrypted := ((hashByte ^ (passByte - 32)) + 32)
-		result[i] = encrypted
-	}
-
-	return result
-}
-
-// extractValue extracts a value using regex pattern
-func extractValue(data, pattern string) string {
-	re := regexp.MustCompile(pattern)
-	matches := re.FindStringSubmatch(data)
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return ""
-}
-
-// runGameLoop handles the main game interaction loop
-func runGameLoop(conn net.Conn) {
-	// Create channels for communication
-	userInput := make(chan string)
-	done := make(chan bool)
-
-	// Start goroutine to read from game
-	go func() {
-		for {
-			// Read byte by byte to handle partial lines
-			b := make([]byte, 1)
-			_, err := conn.Read(b)
-			if err != nil {
-				fmt.Printf("\nConnection lost: %v\n", err)
-				done <- true
-				return
-			}
-
-			// Strip XML tags for now (basic approach)
-			char := string(b[0])
-			if char == "<" {
-				// Skip until we find >
-				for {
-					_, err := conn.Read(b)
-					if err != nil || string(b[0]) == ">" {
-						break
-					}
-				}
-				continue
-			}
-
-			// Print the character
-			fmt.Print(char)
-		}
-	}()
-
-	// Start goroutine to read user input
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			userInput <- scanner.Text()
-		}
-	}()
-
-	// Main loop
-	for {
-		select {
-		case <-done:
-			return
-		case input := <-userInput:
-			if input == "quit" {
-				fmt.Println("\nGoodbye!")
-				return
-			}
-			// Send command to game
-			_, err := conn.Write([]byte(input + "\n"))
-			if err != nil {
-				fmt.Printf("\nFailed to send command: %v\n", err)
-				return
-			}
-		}
-	}
+	return session, ui.InitialEnhancedModel(session, cfg.Character), nil
 }

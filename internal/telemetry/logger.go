@@ -11,11 +11,10 @@ import (
 
 // Logger handles game session logging
 type Logger struct {
-	enabled    bool
-	file       *os.File
-	writer     *bufio.Writer
-	logDir     string
-	currentLog string
+	enabled bool
+	file    *os.File
+	writer  *bufio.Writer
+	logDir  string
 }
 
 // NewLogger creates a new logger
@@ -50,7 +49,6 @@ func (l *Logger) Start(character string) error {
 
 	l.file = file
 	l.writer = bufio.NewWriter(file)
-	l.currentLog = filepath
 	l.enabled = true
 
 	// Write header
@@ -84,15 +82,6 @@ func (l *Logger) Log(line string) {
 	l.writer.WriteString(fmt.Sprintf("[%s] %s\n", timestamp, line))
 }
 
-// LogRaw writes raw text without timestamp
-func (l *Logger) LogRaw(text string) {
-	if !l.enabled || l.writer == nil {
-		return
-	}
-
-	l.writer.WriteString(text)
-}
-
 // LogCommand logs a player command
 func (l *Logger) LogCommand(cmd string) {
 	if !l.enabled {
@@ -113,21 +102,9 @@ func (l *Logger) LogGameOutput(output string) {
 	l.Log(clean)
 }
 
-// Flush ensures all buffered data is written
-func (l *Logger) Flush() {
-	if l.writer != nil {
-		l.writer.Flush()
-	}
-}
-
 // IsEnabled returns whether logging is active
 func (l *Logger) IsEnabled() bool {
 	return l.enabled
-}
-
-// GetCurrentLog returns the path to the current log file
-func (l *Logger) GetCurrentLog() string {
-	return l.currentLog
 }
 
 // writeHeader writes the log file header
@@ -172,63 +149,4 @@ func stripANSI(text string) string {
 	}
 
 	return result.String()
-}
-
-// SessionReplay handles replaying logged sessions
-type SessionReplay struct {
-	lines      []string
-	currentIdx int
-	speed      time.Duration
-}
-
-// LoadSession loads a log file for replay
-func LoadSession(logPath string) (*SessionReplay, error) {
-	file, err := os.Open(logPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %w", err)
-	}
-	defer file.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read log file: %w", err)
-	}
-
-	return &SessionReplay{
-		lines:      lines,
-		currentIdx: 0,
-		speed:      50 * time.Millisecond, // Default replay speed
-	}, nil
-}
-
-// NextLine returns the next line in the replay
-func (sr *SessionReplay) NextLine() (string, bool) {
-	if sr.currentIdx >= len(sr.lines) {
-		return "", false
-	}
-
-	line := sr.lines[sr.currentIdx]
-	sr.currentIdx++
-	return line, true
-}
-
-// Reset restarts the replay from the beginning
-func (sr *SessionReplay) Reset() {
-	sr.currentIdx = 0
-}
-
-// SetSpeed changes the replay speed
-func (sr *SessionReplay) SetSpeed(speed time.Duration) {
-	sr.speed = speed
-}
-
-// GetProgress returns the current replay progress
-func (sr *SessionReplay) GetProgress() (current, total int) {
-	return sr.currentIdx, len(sr.lines)
 }
