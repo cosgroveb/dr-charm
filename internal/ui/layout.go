@@ -1,440 +1,174 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"dr-charm/internal/dragonrealms"
+	"github.com/charmbracelet/lipgloss"
 )
 
-// Pane represents a window pane in the layout
-type Pane struct {
-	ID      string
-	Title   string
-	Content []string
-	Width   int
-	Height  int
-	Style   lipgloss.Style
-	Focused bool
-}
+var paneOrder = [...]string{"main", "room", "hands", "familiar"}
 
-// Layout manages the multi-pane layout
-type Layout struct {
-	panes       map[string]*Pane
-	width       int
-	height      int
-	activePane  string
+type layout struct {
 	borderStyle lipgloss.Style
 }
 
-// NewLayout creates a new layout manager
-func NewLayout(width, height int) *Layout {
-	l := &Layout{
-		panes:  make(map[string]*Pane),
-		width:  width,
-		height: height,
+func newLayout() layout {
+	return layout{
 		borderStyle: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("62")),
 	}
-
-	// Create default panes
-	l.createDefaultPanes()
-
-	return l
 }
 
-// createDefaultPanes sets up the standard DR layout
-func (l *Layout) createDefaultPanes() {
-	// Main game output (left side, takes most space)
-	mainPane := &Pane{
-		ID:    "main",
-		Title: "Game",
-		Style: l.borderStyle.Copy(),
-	}
-	l.panes["main"] = mainPane
-
-	// Room window (top right)
-	roomPane := &Pane{
-		ID:    "room",
-		Title: "Room",
-		Style: l.borderStyle.Copy(),
-	}
-	l.panes["room"] = roomPane
-
-	// Hands window (middle right)
-	handsPane := &Pane{
-		ID:    "hands",
-		Title: "Hands",
-		Style: l.borderStyle.Copy(),
-	}
-	l.panes["hands"] = handsPane
-
-	// Familiar window (bottom right)
-	familiarPane := &Pane{
-		ID:    "familiar",
-		Title: "Familiar",
-		Style: l.borderStyle.Copy(),
-	}
-	l.panes["familiar"] = familiarPane
-
-	// Set main as active
-	l.activePane = "main"
-	mainPane.Focused = true
+func familiarAvailable(output []string) bool {
+	return len(output) > 0 && output[0] != ""
 }
 
-// Resize updates layout dimensions
-func (l *Layout) Resize(width, height int) {
-	l.width = width
-	l.height = height
-}
+func (l layout) render(width, height int, snapshot dragonrealms.Snapshot, mainOutput, familiarOutput []string, activePane string) string {
+	leftWidth := int(float64(width) * 0.7)
+	rightWidth := width - leftWidth - 1
 
-// UpdatePane updates content for a specific pane
-func (l *Layout) UpdatePane(paneID string, content []string) {
-	if pane, ok := l.panes[paneID]; ok {
-		pane.Content = content
-	}
-}
-
-// AddLineToPane adds a single line to a pane
-func (l *Layout) AddLineToPane(paneID string, line string) {
-	if pane, ok := l.panes[paneID]; ok {
-		pane.Content = append(pane.Content, line)
-		// Keep reasonable history - more aggressive for main pane
-		maxLines := 100
-		if paneID == "main" {
-			maxLines = 500 // Main pane can have more history
-		}
-		if len(pane.Content) > maxLines {
-			pane.Content = pane.Content[len(pane.Content)-maxLines:]
-		}
-	}
-}
-
-// SetActivePane changes the focused pane
-func (l *Layout) SetActivePane(paneID string) {
-	// Unfocus previous
-	if prev, ok := l.panes[l.activePane]; ok {
-		prev.Focused = false
-	}
-
-	// Focus new
-	if pane, ok := l.panes[paneID]; ok {
-		l.activePane = paneID
-		pane.Focused = true
-	}
-}
-
-// NextPane cycles to the next pane
-func (l *Layout) NextPane() {
-	// Build pane order based on what's visible
-	paneOrder := []string{"main", "room", "hands"}
-
-	// Only include familiar if it has content
-	if familiarPane, ok := l.panes["familiar"]; ok {
-		if len(familiarPane.Content) > 0 && familiarPane.Content[0] != "" {
-			paneOrder = append(paneOrder, "familiar")
-		}
-	}
-
-	for i, id := range paneOrder {
-		if id == l.activePane {
-			nextIdx := (i + 1) % len(paneOrder)
-			l.SetActivePane(paneOrder[nextIdx])
-			break
-		}
-	}
-}
-
-// Render creates the full layout view
-func (l *Layout) Render() string {
-	return l.RenderWithHeight(l.height)
-}
-
-// RenderWithHeight creates the layout view with a specific height
-func (l *Layout) RenderWithHeight(height int) string {
-
-	// Calculate pane dimensions
-	// Left column (main) takes 70% width
-	leftWidth := int(float64(l.width) * 0.7)
-	rightWidth := l.width - leftWidth - 1 // -1 for gap
-
-	// Check if familiar pane has content
-	hasFamiliar := false
-	if familiarPane, ok := l.panes["familiar"]; ok {
-		hasFamiliar = len(familiarPane.Content) > 0 && familiarPane.Content[0] != ""
-	}
-
-	// Heights for right column panes - adjust based on whether familiar is shown
+	hasFamiliar := familiarAvailable(familiarOutput)
 	var roomHeight, handsHeight, familiarHeight int
 	if hasFamiliar {
 		roomHeight = int(float64(height) * 0.3)
 		handsHeight = int(float64(height) * 0.2)
-		familiarHeight = height - roomHeight - handsHeight - 2 // -2 for gaps
+		familiarHeight = height - roomHeight - handsHeight - 2
 	} else {
-		// Without familiar pane, give more space to room and hands
 		roomHeight = int(float64(height) * 0.5)
-		handsHeight = height - roomHeight - 1 // -1 for gap
-		familiarHeight = 0
+		handsHeight = height - roomHeight - 1
 	}
 
-	// Update pane dimensions
-	if mainPane, ok := l.panes["main"]; ok {
-		mainPane.Width = leftWidth
-		mainPane.Height = height
+	mainView := l.renderPane("main", "Game", leftWidth, height, mainOutput, activePane)
+	rightPanes := []string{
+		l.renderPane("room", "Room", rightWidth, roomHeight, roomContent(snapshot), activePane),
+		l.renderPane("hands", "Hands", rightWidth, handsHeight, handsContent(snapshot), activePane),
 	}
-
-	if roomPane, ok := l.panes["room"]; ok {
-		roomPane.Width = rightWidth
-		roomPane.Height = roomHeight
-	}
-
-	if handsPane, ok := l.panes["hands"]; ok {
-		handsPane.Width = rightWidth
-		handsPane.Height = handsHeight
-	}
-
-	if familiarPane, ok := l.panes["familiar"]; ok && hasFamiliar {
-		familiarPane.Width = rightWidth
-		familiarPane.Height = familiarHeight
-	}
-
-	// Render panes
-	mainView := l.renderPane("main")
-
-	roomView := l.renderPane("room")
-
-	handsView := l.renderPane("hands")
-
-	// Build right column based on what's visible
-	var rightPanes []string
-	rightPanes = append(rightPanes, roomView)
-	rightPanes = append(rightPanes, handsView)
-
 	if hasFamiliar {
-		familiarView := l.renderPane("familiar")
-		rightPanes = append(rightPanes, familiarView)
+		rightPanes = append(rightPanes, l.renderPane("familiar", "Familiar", rightWidth, familiarHeight, familiarOutput, activePane))
 	}
-
-	// Combine right column
-	rightColumn := lipgloss.JoinVertical(lipgloss.Left, rightPanes...)
-
-	// Combine columns
-	result := lipgloss.JoinHorizontal(lipgloss.Top,
-		mainView,
-		rightColumn,
-	)
-	return result
+	return lipgloss.JoinHorizontal(lipgloss.Top, mainView, lipgloss.JoinVertical(lipgloss.Left, rightPanes...))
 }
 
-// renderPane renders a single pane
-func (l *Layout) renderPane(paneID string) string {
-	pane, ok := l.panes[paneID]
-	if !ok {
-		return ""
+func (l layout) renderPane(id, title string, width, height int, lines []string, activePane string) string {
+	style := l.borderStyle
+	if id == activePane {
+		style = style.BorderForeground(lipgloss.Color("170"))
 	}
 
-	// Update border style for focused pane
-	style := pane.Style.Copy()
-	if pane.Focused {
-		style = style.BorderForeground(lipgloss.Color("170")) // Bright purple for focused
-	}
-
-	// Calculate content area
-	contentWidth := pane.Width - 4   // -4 for borders and padding
-	contentHeight := pane.Height - 4 // -4 for borders, padding, and title
-
-	// Render content
-	var content strings.Builder
-
-	// Add title
-	titleStyle := lipgloss.NewStyle().
+	contentWidth := max(width-4, 0)
+	contentHeight := height - 4
+	titleLine := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("170")).
 		Width(contentWidth).
-		Align(lipgloss.Center)
+		Align(lipgloss.Center).
+		Render(title)
 
-	content.WriteString(titleStyle.Render(pane.Title))
-	content.WriteString("\n")
-
-	// Add pane-specific content
-	switch paneID {
+	var body string
+	switch id {
 	case "room":
-		content.WriteString(l.renderRoomContent(pane, contentHeight-1))
+		body = renderRoomContent(lines, contentHeight-1)
 	case "hands":
-		content.WriteString(l.renderHandsContent(pane, contentHeight-1))
-	case "familiar":
-		content.WriteString(l.renderFamiliarContent(pane, contentHeight-1))
+		body = renderHandsContent(lines, contentHeight-1)
 	default:
-		content.WriteString(l.renderGenericContent(pane, contentHeight-1))
+		body = renderPlainContent(lines, contentHeight-1)
 	}
-
-	// Apply style with dimensions
-	contentStr := content.String()
-
-	// Pre-trim content to exact height to avoid expensive lipgloss measuring
-	contentLines := strings.Split(contentStr, "\n")
-	if len(contentLines) > pane.Height-2 { // -2 for borders
-		contentLines = contentLines[:pane.Height-2]
-		contentStr = strings.Join(contentLines, "\n")
+	content := titleLine + "\n" + body
+	contentLines := strings.Split(content, "\n")
+	limit := max(height-2, 0)
+	if len(contentLines) > limit {
+		content = strings.Join(contentLines[:limit], "\n")
 	}
-
-	return style.
-		Width(pane.Width).
-		Render(contentStr)
+	return style.Width(width).Render(content)
 }
 
-// renderRoomContent renders the room pane content
-func (l *Layout) renderRoomContent(pane *Pane, maxLines int) string {
-	// Ensure maxLines is at least 0
-	if maxLines < 0 {
-		maxLines = 0
-	}
-
+func roomContent(snapshot dragonrealms.Snapshot) []string {
 	var lines []string
-
-	// Room content is typically structured
-	for _, line := range pane.Content {
-		if strings.HasPrefix(line, "Exits:") {
-			// Highlight exits
-			lines = append(lines, lipgloss.NewStyle().
-				Foreground(lipgloss.Color("46")).
-				Render(line))
-		} else if strings.HasPrefix(line, "You also see") {
-			// Highlight objects
-			lines = append(lines, lipgloss.NewStyle().
-				Foreground(lipgloss.Color("226")).
-				Render(line))
-		} else {
-			lines = append(lines, line)
+	room := snapshot.Room
+	if room.Title != "" {
+		lines = append(lines, room.Title, "")
+	}
+	if room.Description != "" {
+		lines = append(lines, strings.TrimSpace(room.Description), "")
+	}
+	validExits := make([]string, 0, len(room.Exits))
+	for _, exit := range room.Exits {
+		if exit != "" {
+			validExits = append(validExits, exit)
 		}
 	}
-
-	// Trim to fit
-	if maxLines > 0 && len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
+	if len(validExits) > 0 {
+		lines = append(lines, "Exits: "+strings.Join(validExits, ", "))
 	}
-
-	return strings.Join(lines, "\n")
+	if len(room.Objects) > 0 {
+		lines = append(lines, "", "You also see:")
+		for _, object := range room.Objects {
+			lines = append(lines, "  "+object)
+		}
+	}
+	if len(room.Players) > 0 {
+		lines = append(lines, "", "Also here:")
+		for _, player := range room.Players {
+			lines = append(lines, "  "+player)
+		}
+	}
+	if len(room.Creatures) > 0 {
+		lines = append(lines, "", "Creatures:")
+		for _, creature := range room.Creatures {
+			lines = append(lines, "  "+creature)
+		}
+	}
+	return lines
 }
 
-// renderHandsContent renders the hands pane content
-func (l *Layout) renderHandsContent(pane *Pane, maxLines int) string {
-	// Ensure maxLines is at least 0
-	if maxLines < 0 {
-		maxLines = 0
-	}
-
-	var lines []string
-
-	for _, line := range pane.Content {
-		if strings.Contains(line, "Right:") || strings.Contains(line, "Left:") {
-			// Style hand labels
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				label := lipgloss.NewStyle().
-					Bold(true).
-					Foreground(lipgloss.Color("170")).
-					Render(parts[0] + ":")
-				lines = append(lines, label+" "+parts[1])
-			} else {
-				lines = append(lines, line)
-			}
-		} else {
-			lines = append(lines, line)
-		}
-	}
-
-	if maxLines > 0 && len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-// renderFamiliarContent renders the familiar pane content
-func (l *Layout) renderFamiliarContent(pane *Pane, maxLines int) string {
-	// Ensure maxLines is at least 0
-	if maxLines < 0 {
-		maxLines = 0
-	}
-
-	lines := pane.Content
-	if maxLines > 0 && len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	return strings.Join(lines, "\n")
-}
-
-// renderGenericContent renders generic pane content
-func (l *Layout) renderGenericContent(pane *Pane, maxLines int) string {
-	// Ensure maxLines is at least 0
-	if maxLines < 0 {
-		maxLines = 0
-	}
-
-	lines := pane.Content
-	if maxLines > 0 && len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	return strings.Join(lines, "\n")
-}
-
-// UpdateFromSnapshot renders canonical Session state in the room and hands panes.
-func (l *Layout) UpdateFromSnapshot(snapshot dragonrealms.Snapshot) {
-	var roomContent []string
-	if snapshot.Room.Title != "" {
-		roomContent = append(roomContent, snapshot.Room.Title)
-		roomContent = append(roomContent, "")
-	}
-	if snapshot.Room.Description != "" {
-		desc := strings.TrimSpace(snapshot.Room.Description)
-		roomContent = append(roomContent, desc)
-		roomContent = append(roomContent, "")
-	}
-	if len(snapshot.Room.Exits) > 0 {
-		var validExits []string
-		for _, exit := range snapshot.Room.Exits {
-			if exit != "" {
-				validExits = append(validExits, exit)
-			}
-		}
-		if len(validExits) > 0 {
-			roomContent = append(roomContent, "Exits: "+strings.Join(validExits, ", "))
-		}
-	}
-	if len(snapshot.Room.Objects) > 0 {
-		roomContent = append(roomContent, "")
-		roomContent = append(roomContent, "You also see:")
-		for _, obj := range snapshot.Room.Objects {
-			roomContent = append(roomContent, "  "+obj)
-		}
-	}
-	if len(snapshot.Room.Players) > 0 {
-		roomContent = append(roomContent, "")
-		roomContent = append(roomContent, "Also here:")
-		for _, player := range snapshot.Room.Players {
-			roomContent = append(roomContent, "  "+player)
-		}
-	}
-	if len(snapshot.Room.Creatures) > 0 {
-		roomContent = append(roomContent, "")
-		roomContent = append(roomContent, "Creatures:")
-		for _, creature := range snapshot.Room.Creatures {
-			roomContent = append(roomContent, "  "+creature)
-		}
-	}
-	l.UpdatePane("room", roomContent)
-
-	handsContent := []string{
-		fmt.Sprintf("Right: %s", snapshot.Hands.Right),
-		fmt.Sprintf("Left: %s", snapshot.Hands.Left),
+func handsContent(snapshot dragonrealms.Snapshot) []string {
+	lines := []string{
+		"Right: " + snapshot.Hands.Right,
+		"Left: " + snapshot.Hands.Left,
 	}
 	if snapshot.PreparedSpell != "" {
-		handsContent = append(handsContent, "")
-		handsContent = append(handsContent, fmt.Sprintf("Spell: %s", snapshot.PreparedSpell))
+		lines = append(lines, "", "Spell: "+snapshot.PreparedSpell)
 	}
-	l.UpdatePane("hands", handsContent)
+	return lines
+}
+
+func renderRoomContent(content []string, maxLines int) string {
+	lines := make([]string, len(content))
+	for index, line := range content {
+		switch {
+		case strings.HasPrefix(line, "Exits:"):
+			lines[index] = lipgloss.NewStyle().Foreground(lipgloss.Color("46")).Render(line)
+		case strings.HasPrefix(line, "You also see"):
+			lines[index] = lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render(line)
+		default:
+			lines[index] = line
+		}
+	}
+	return renderPlainContent(lines, maxLines)
+}
+
+func renderHandsContent(content []string, maxLines int) string {
+	lines := make([]string, len(content))
+	for index, line := range content {
+		if strings.Contains(line, "Right:") || strings.Contains(line, "Left:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("170")).Render(parts[0] + ":")
+				lines[index] = label + " " + parts[1]
+				continue
+			}
+		}
+		lines[index] = line
+	}
+	return renderPlainContent(lines, maxLines)
+}
+
+func renderPlainContent(content []string, maxLines int) string {
+	lines := content
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n")
 }

@@ -83,9 +83,6 @@ DR_E2E_CONFIG=/path/to/config.yaml \
   -run TestDragonRealmsEndToEnd -count=1 -timeout=60s
 ```
 
-`dagger call ci --source .` requires a Docker-compatible engine. Report engine
-startup failures separately from code failures.
-
 ## Change rules
 
 - Read surrounding code before changing package boundaries.

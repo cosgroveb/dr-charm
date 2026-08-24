@@ -36,11 +36,13 @@ type EnhancedModel struct {
 	history      []string
 	historyIndex int
 
-	layout         *Layout
+	layout         layout
 	triggerManager *automation.TriggerManager
-	themeManager   *ThemeManager
+	themes         *themeCatalog
 	logger         *telemetry.Logger
 	mainOutput     []string
+	familiarOutput []string
+	activePane     string
 }
 
 // ViewMode selects the visible terminal layout.
@@ -68,10 +70,11 @@ func InitialEnhancedModel(session gameSession, character string) EnhancedModel {
 		viewMode:       ViewModeMulti,
 		autoScroll:     true,
 		mainOutput:     []string{"Connected to DragonRealms"},
-		layout:         NewLayout(80, 24),
+		layout:         newLayout(),
 		triggerManager: automation.NewTriggerManager(),
-		themeManager:   NewThemeManager(themeDir),
+		themes:         newThemeCatalog(themeDir),
 		logger:         telemetry.NewLogger(logDir),
+		activePane:     "main",
 	}
 }
 
@@ -89,11 +92,6 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = message.Width
 		m.height = message.Height
-		layoutHeight := message.Height - 7
-		if layoutHeight < 10 {
-			layoutHeight = 10
-		}
-		m.layout.Resize(message.Width, layoutHeight)
 		return m, nil
 	case dragonrealms.Update:
 		m.applySessionUpdate(message)
@@ -108,7 +106,6 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *EnhancedModel) applySessionUpdate(update dragonrealms.Update) {
 	m.snapshot = update.Snapshot
-	m.layout.UpdateFromSnapshot(update.Snapshot)
 	for _, display := range update.Display {
 		switch display.Kind {
 		case dragonrealms.DisplayText:
@@ -116,7 +113,7 @@ func (m *EnhancedModel) applySessionUpdate(update dragonrealms.Update) {
 				continue
 			}
 			if display.Stream == "familiar" {
-				m.layout.AddLineToPane("familiar", display.Text)
+				m.addFamiliarOutput(display.Text)
 				continue
 			}
 			processed := m.triggerManager.ProcessLine(display.Text)
@@ -128,9 +125,13 @@ func (m *EnhancedModel) applySessionUpdate(update dragonrealms.Update) {
 				pane = display.ID
 			}
 			if pane == "familiar" || pane == "main" {
-				m.layout.UpdatePane(pane, nil)
 				if pane == "main" {
 					m.mainOutput = nil
+				} else {
+					m.familiarOutput = nil
+					if m.activePane == "familiar" {
+						m.activePane = "main"
+					}
 				}
 			}
 		}
@@ -174,7 +175,7 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyTab:
 		if m.viewMode == ViewModeMulti {
-			m.layout.NextPane()
+			m.cyclePane()
 		}
 		return m, nil
 	}
@@ -242,23 +243,11 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m EnhancedModel) handleThemeKeys(message tea.KeyMsg) EnhancedModel {
-	themes := m.themeManager.GetThemeNames()
-	current := 0
-	for i, name := range themes {
-		if name == m.themeManager.currentTheme {
-			current = i
-			break
-		}
-	}
 	switch message.Type {
 	case tea.KeyUp:
-		if current > 0 {
-			m.themeManager.SetTheme(themes[current-1])
-		}
+		m.themes.previous()
 	case tea.KeyDown:
-		if current < len(themes)-1 {
-			m.themeManager.SetTheme(themes[current+1])
-		}
+		m.themes.next()
 	case tea.KeyEnter, tea.KeyEsc:
 		m.viewMode = ViewModeSingle
 	}
@@ -267,9 +256,31 @@ func (m EnhancedModel) handleThemeKeys(message tea.KeyMsg) EnhancedModel {
 
 func (m *EnhancedModel) addOutput(line string) {
 	m.mainOutput = append(m.mainOutput, line)
-	m.layout.AddLineToPane("main", line)
 	if len(m.mainOutput) > 500 {
 		m.mainOutput = append([]string(nil), m.mainOutput[len(m.mainOutput)-500:]...)
+	}
+}
+
+func (m *EnhancedModel) addFamiliarOutput(line string) {
+	m.familiarOutput = append(m.familiarOutput, line)
+	if len(m.familiarOutput) > 100 {
+		m.familiarOutput = append([]string(nil), m.familiarOutput[len(m.familiarOutput)-100:]...)
+	}
+	if !familiarAvailable(m.familiarOutput) {
+		m.activePane = "main"
+	}
+}
+
+func (m *EnhancedModel) cyclePane() {
+	limit := len(paneOrder)
+	if !familiarAvailable(m.familiarOutput) {
+		limit--
+	}
+	for index := range limit {
+		if paneOrder[index] == m.activePane {
+			m.activePane = paneOrder[(index+1)%limit]
+			return
+		}
 	}
 }
 
@@ -319,11 +330,11 @@ func (m EnhancedModel) View() string {
 }
 
 func (m EnhancedModel) renderSinglePane() string {
-	theme := m.themeManager.GetTheme()
+	theme := m.themes.current()
 	outputHeight := max(m.height-7, 3)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.Colors.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Colors.StatusBar)).Background(lipgloss.Color(theme.Colors.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
-	border := m.themeManager.CreateBorderStyle().Width(m.width - 2)
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
+	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.StatusBar)).Background(lipgloss.Color(theme.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
+	border := m.themes.borderStyle().Width(m.width - 2)
 	result := strings.Join([]string{title, status, border.Render(m.buildOutput(outputHeight - 2)), border.Render(m.buildInput())}, "\n")
 	if m.err != nil {
 		result += "\n\nError: " + m.err.Error()
@@ -332,12 +343,12 @@ func (m EnhancedModel) renderSinglePane() string {
 }
 
 func (m EnhancedModel) renderMultiPane() string {
-	theme := m.themeManager.GetTheme()
+	theme := m.themes.current()
 	layoutHeight := max(m.height-7, 10)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.Colors.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Colors.StatusBar)).Background(lipgloss.Color(theme.Colors.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
-	input := m.themeManager.CreateBorderStyle().Width(m.width - 2).Render(m.buildInput())
-	layout := lipgloss.NewStyle().MaxHeight(layoutHeight).Height(layoutHeight).Render(m.layout.RenderWithHeight(layoutHeight))
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
+	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.StatusBar)).Background(lipgloss.Color(theme.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
+	input := m.themes.borderStyle().Width(m.width - 2).Render(m.buildInput())
+	layout := lipgloss.NewStyle().MaxHeight(layoutHeight).Height(layoutHeight).Render(m.layout.render(m.width, layoutHeight, m.snapshot, m.mainOutput, m.familiarOutput, m.activePane))
 	result := strings.Join([]string{title, status, layout, input}, "\n")
 	if m.err != nil {
 		result += "\n\nError: " + m.err.Error()
@@ -359,20 +370,21 @@ Up/Down     Command history
 Ctrl+C      Quit
 
 Press ESC to return`
-	return lipgloss.NewStyle().Padding(2).Width(m.width).Height(m.height).Foreground(lipgloss.Color(m.themeManager.GetTheme().Colors.Foreground)).Render(text)
+	return lipgloss.NewStyle().Padding(2).Width(m.width).Height(m.height).Foreground(lipgloss.Color(m.themes.current().Foreground)).Render(text)
 }
 
 func (m EnhancedModel) renderThemeSelector() string {
 	var content strings.Builder
 	content.WriteString("Select Theme (Up/Down, Enter, ESC)\n\n")
-	for _, name := range m.themeManager.GetThemeNames() {
+	current := m.themes.current().Name
+	for _, name := range m.themes.names() {
 		prefix := "    "
-		if name == m.themeManager.currentTheme {
+		if name == current {
 			prefix = "  > "
 		}
 		fmt.Fprintf(&content, "%s%s\n", prefix, name)
 	}
-	return lipgloss.NewStyle().Padding(2).Width(m.width).Height(m.height).Foreground(lipgloss.Color(m.themeManager.GetTheme().Colors.Foreground)).Render(content.String())
+	return lipgloss.NewStyle().Padding(2).Width(m.width).Height(m.height).Foreground(lipgloss.Color(m.themes.current().Foreground)).Render(content.String())
 }
 
 func (m EnhancedModel) buildTitle() string {

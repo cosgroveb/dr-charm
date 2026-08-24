@@ -54,12 +54,11 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu            sync.RWMutex
-	conn          net.Conn
-	state         ConnectionState
-	lastCommand   string
-	sentCommand   bool
-	callerClosing bool
+	mu             sync.RWMutex
+	conn           net.Conn
+	state          ConnectionState
+	reconnectArmed bool
+	callerClosing  bool
 
 	writeMu   sync.Mutex
 	updates   chan Update
@@ -205,8 +204,10 @@ func (s *Session) Send(command string) error {
 		return errors.New("could not send DragonRealms command")
 	}
 	s.mu.Lock()
-	s.sentCommand = true
-	s.lastCommand = strings.ToLower(strings.TrimSpace(command))
+	if s.conn == conn && (s.state == ConnectionConnected || s.state == ConnectionReady) {
+		normalized := strings.ToLower(strings.TrimSpace(command))
+		s.reconnectArmed = normalized != "quit" && normalized != "exit"
+	}
 	s.mu.Unlock()
 	return nil
 }
@@ -253,6 +254,9 @@ func (s *Session) readLoop() {
 	for {
 		conn := s.currentConn()
 		if conn == nil {
+			if s.ctx.Err() != nil {
+				return
+			}
 			s.terminal(reducer, errors.New("DragonRealms connection unavailable"))
 			return
 		}
@@ -262,6 +266,9 @@ func (s *Session) readLoop() {
 		n, err := conn.Read(buffer)
 		if n > 0 {
 			if processErr := s.processActions(reducer, decoder.feed(buffer[:n])); processErr != nil {
+				if s.ctx.Err() != nil || errors.Is(processErr, context.Canceled) {
+					return
+				}
 				s.terminal(reducer, processErr)
 				return
 			}
@@ -269,18 +276,27 @@ func (s *Session) readLoop() {
 		if err == nil {
 			continue
 		}
-		if s.ctx.Err() != nil {
+		if s.ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return
 		}
 		if processErr := s.processActions(reducer, decoder.finish()); processErr != nil {
+			if s.ctx.Err() != nil || errors.Is(processErr, context.Canceled) {
+				return
+			}
 			s.terminal(reducer, processErr)
 			return
 		}
 		if s.reconnectEligible(err) {
-			if reconnectErr := s.reconnect(reducer); reconnectErr == nil {
+			reconnectErr := s.reconnect(reducer)
+			if reconnectErr == nil {
 				decoder = newStreamDecoder()
 				continue
 			}
+			if s.ctx.Err() != nil || errors.Is(reconnectErr, context.Canceled) {
+				return
+			}
+			s.terminal(reducer, reconnectErr)
+			return
 		}
 		s.terminal(reducer, err)
 		return
@@ -289,9 +305,9 @@ func (s *Session) readLoop() {
 
 func (s *Session) processActions(reducer *reducer, actions []protocolAction) error {
 	for _, action := range actions {
-		wasReady := reducer.ready
+		wasReady := reducer.public.Connection == ConnectionReady
 		update, publish := reducer.apply(action)
-		if !wasReady && reducer.ready {
+		if !wasReady && reducer.public.Connection == ConnectionReady {
 			if err := s.sendSystem("look"); err != nil {
 				return err
 			}
@@ -334,7 +350,7 @@ func (s *Session) reconnectEligible(err error) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.ctx.Err() == nil && s.state != ConnectionClosed && s.sentCommand && s.lastCommand != "quit" && s.lastCommand != "exit" && !s.callerClosing
+	return s.ctx.Err() == nil && s.state != ConnectionClosed && s.reconnectArmed && !s.callerClosing
 }
 
 func (s *Session) reconnect(reducer *reducer) error {
@@ -441,8 +457,7 @@ func (s *Session) replaceConn(conn net.Conn) bool {
 	old := s.conn
 	s.conn = conn
 	s.state = ConnectionConnected
-	s.sentCommand = false
-	s.lastCommand = ""
+	s.reconnectArmed = false
 	s.mu.Unlock()
 	if old != nil {
 		_ = old.Close()

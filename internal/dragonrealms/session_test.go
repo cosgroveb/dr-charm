@@ -42,18 +42,24 @@ func TestSessionHandshakeReadinessAndSend(t *testing.T) {
 		t.Fatalf("state = %v", session.stateValue())
 	}
 
-	conn.reads <- readResult{data: []byte("<settingsInfo/><component id='room title'>[Square]</component><prompt time='1'>&gt;</prompt>")}
+	conn.reads <- readResult{data: []byte("<settingsInfo/><settingsInfo/><component id='room title'>[Square]</component><prompt time='1'>&gt;</prompt>")}
+	lastConnection := ConnectionConnected
+	readyTransitions := 0
 	var ready Update
-	for ready.Snapshot.Connection != ConnectionReady {
+	for ready.Snapshot.Prompt != ">" {
 		select {
 		case ready = <-session.Updates():
+			if lastConnection != ConnectionReady && ready.Snapshot.Connection == ConnectionReady {
+				readyTransitions++
+			}
+			lastConnection = ready.Snapshot.Connection
 		case <-time.After(time.Second):
 			t.Fatal("ready update timed out")
 		}
 	}
 	writes := conn.waitForWrites(t, 4)
-	if writes[2] != "look\r\n" || writes[3] != "flags\r\n" {
-		t.Fatalf("automatic writes = %#v", writes)
+	if readyTransitions != 1 || len(writes) != 4 || writes[2] != "look\r\n" || writes[3] != "flags\r\n" {
+		t.Fatalf("ready transitions = %d, automatic writes = %#v", readyTransitions, writes)
 	}
 
 	if err := session.Send("say jalapeño"); err != nil {
@@ -252,6 +258,164 @@ func TestReconnectRequiresFreshCommandOnNewConnection(t *testing.T) {
 	}
 }
 
+func TestLateSuccessfulSendDoesNotArmReplacement(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		freshSend bool
+		wantDials int
+	}{
+		{name: "no fresh command", wantDials: 2},
+		{name: "fresh command", freshSend: true, wantDials: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			first := newLateSuccessfulCommandConn()
+			connections := []net.Conn{first, newScriptedConn(), newScriptedConn()}
+			options := testSessionOptions(first)
+			var dialMu sync.Mutex
+			dials := 0
+			options.dialGame = func(context.Context, string, string) (net.Conn, error) {
+				dialMu.Lock()
+				defer dialMu.Unlock()
+				if dials >= len(connections) {
+					return nil, errors.New("unexpected extra game dial")
+				}
+				conn := connections[dials]
+				dials++
+				return conn, nil
+			}
+
+			session, err := dialWithOptions(context.Background(), Credentials{Account: "a", Password: "p", Character: "Hero"}, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.Close()
+			defer first.releaseWrite()
+
+			waitForState := func(want ConnectionState) {
+				t.Helper()
+				for {
+					select {
+					case update, ok := <-session.Updates():
+						if !ok {
+							t.Fatalf("updates closed before state %v", want)
+						}
+						if update.Snapshot.Connection == want {
+							return
+						}
+					case <-time.After(time.Second):
+						t.Fatalf("state %v timed out", want)
+					}
+				}
+			}
+
+			if err := session.Send("look"); err != nil {
+				t.Fatal(err)
+			}
+			first.armNextCommand()
+			sendDone := make(chan error, 1)
+			go func() {
+				sendDone <- session.Send("wait")
+			}()
+			select {
+			case <-first.succeeded:
+			case <-time.After(time.Second):
+				t.Fatal("old command write did not succeed")
+			}
+
+			first.reads <- readResult{err: errors.New("first reset")}
+			waitForState(ConnectionReconnecting)
+			waitForState(ConnectionConnected)
+			second := connections[1].(*scriptedConn)
+			second.waitForWrites(t, 2)
+
+			first.releaseWrite()
+			select {
+			case err := <-sendDone:
+				if err != nil {
+					t.Fatalf("late Send = %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("late Send did not return")
+			}
+
+			if tt.freshSend {
+				if err := session.Send("north"); err != nil {
+					t.Fatal(err)
+				}
+				second.waitForWrites(t, 3)
+			}
+			second.reads <- readResult{err: errors.New("second reset")}
+
+			if tt.freshSend {
+				waitForState(ConnectionReconnecting)
+				waitForState(ConnectionConnected)
+				connections[2].(*scriptedConn).waitForWrites(t, 2)
+			} else {
+				for {
+					select {
+					case update, ok := <-session.Updates():
+						if !ok {
+							goto closed
+						}
+						if update.Snapshot.Connection == ConnectionReconnecting {
+							t.Fatal("late old-connection write armed replacement")
+						}
+					case <-time.After(time.Second):
+						t.Fatal("second connection did not terminate")
+					}
+				}
+			}
+
+		closed:
+			dialMu.Lock()
+			gotDials := dials
+			dialMu.Unlock()
+			if gotDials != tt.wantDials {
+				t.Fatalf("game dials = %d, want %d", gotDials, tt.wantDials)
+			}
+		})
+	}
+}
+
+func TestReconnectArmingCommandPolicy(t *testing.T) {
+	conn := newControlledCommandConn()
+	session, err := dialWithOptions(context.Background(), Credentials{Account: "a", Password: "p", Character: "Hero"}, testSessionOptions(conn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	for _, tt := range []struct {
+		name         string
+		command      string
+		writeFails   bool
+		wantEligible bool
+	}{
+		{name: "empty arms", command: "", wantEligible: true},
+		{name: "whitespace arms", command: "   ", wantEligible: true},
+		{name: "quit disarms", command: " QuIt "},
+		{name: "ordinary rearms after quit", command: "north", wantEligible: true},
+		{name: "failed quit leaves armed", command: "quit", writeFails: true, wantEligible: true},
+		{name: "exit disarms", command: " EXIT "},
+		{name: "failed ordinary leaves disarmed", command: "look", writeFails: true},
+		{name: "ordinary rearms after exit", command: "south", wantEligible: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			conn.setCommandFailure(tt.writeFails)
+			err := session.Send(tt.command)
+			if tt.writeFails && err == nil {
+				t.Fatal("command write unexpectedly succeeded")
+			}
+			if !tt.writeFails && err != nil {
+				t.Fatal(err)
+			}
+			if got := session.reconnectEligible(errors.New("reset")); got != tt.wantEligible {
+				t.Fatalf("reconnect eligibility = %v, want %v", got, tt.wantEligible)
+			}
+		})
+	}
+}
+
 func TestSessionDoesNotReconnectWithoutEligibleCommand(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -322,6 +486,40 @@ func TestReconnectExhaustsExactDelayLadder(t *testing.T) {
 	want := []time.Duration{8 * time.Second, 8 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second}
 	if dials != 6 || !reflect.DeepEqual(delays, want) {
 		t.Fatalf("dials = %d, delays = %#v", dials, delays)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReconnectExhaustionPublishesReconnectFailure(t *testing.T) {
+	conn := newScriptedConn()
+	options := testSessionOptions(conn)
+	dials := 0
+	options.dialGame = func(context.Context, string, string) (net.Conn, error) {
+		dials++
+		if dials == 1 {
+			return conn, nil
+		}
+		return nil, io.EOF
+	}
+	session, err := dialWithOptions(context.Background(), Credentials{Account: "a", Password: "p", Character: "Hero"}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Send("look"); err != nil {
+		t.Fatal(err)
+	}
+	conn.reads <- readResult{err: errors.New("generic read reset")}
+
+	var terminal error
+	for update := range session.Updates() {
+		if update.Err != nil {
+			terminal = update.Err
+		}
+	}
+	if terminal == nil || terminal.Error() != "DragonRealms connection closed" {
+		t.Fatalf("terminal error = %v, want reconnect EOF classification", terminal)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
@@ -454,6 +652,95 @@ func TestSendReturnsUnavailableDuringReconnect(t *testing.T) {
 	}
 	close(release)
 	second.waitForWrites(t, 2)
+}
+
+func TestCloseCancelsBlockedReconnectWait(t *testing.T) {
+	conn := newScriptedConn()
+	options := testSessionOptions(conn)
+	dials := 0
+	options.dialGame = func(context.Context, string, string) (net.Conn, error) {
+		dials++
+		return conn, nil
+	}
+	entered := make(chan struct{}, 1)
+	options.wait = func(ctx context.Context, _ time.Duration) error {
+		entered <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	session, err := dialWithOptions(context.Background(), Credentials{Account: "a", Password: "p", Character: "Hero"}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Send("look"); err != nil {
+		t.Fatal(err)
+	}
+	conn.reads <- readResult{err: errors.New("generic read reset")}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("reconnect wait was not entered")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- session.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel reconnect wait")
+	}
+	for update := range session.Updates() {
+		if update.Err != nil {
+			t.Fatalf("canceled reconnect published terminal error: %v", update.Err)
+		}
+	}
+	if dials != 1 {
+		t.Fatalf("game dials = %d, want 1", dials)
+	}
+}
+
+func TestCloseCancelsBlockedReadyPublication(t *testing.T) {
+	conn := newScriptedConn()
+	options := testSessionOptions(conn)
+	options.updateCapacity = 1
+	session, err := dialWithOptions(context.Background(), Credentials{Account: "a", Password: "p", Character: "Hero"}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.updates <- Update{}
+	conn.reads <- readResult{data: []byte("<settingsInfo/>")}
+	conn.waitForWrites(t, 4)
+
+	readyDeadline := time.NewTimer(time.Second)
+	defer readyDeadline.Stop()
+	readyPoll := time.NewTicker(time.Millisecond)
+	defer readyPoll.Stop()
+	for session.stateValue() != ConnectionReady {
+		select {
+		case <-readyPoll.C:
+		case <-readyDeadline.C:
+			t.Fatal("session did not reach ready state")
+		}
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- session.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel blocked ready publication")
+	}
+	for update := range session.Updates() {
+		if update.Err != nil {
+			t.Fatalf("canceled ready publication produced terminal error: %v", update.Err)
+		}
+	}
 }
 
 func TestWatchdogSetsApplicationDeadline(t *testing.T) {
@@ -747,6 +1034,83 @@ type commandWriteErrorConn struct {
 
 func (c *commandWriteErrorConn) Write(data []byte) (int, error) {
 	if bytes.HasSuffix(data, []byte("\r\n")) {
+		return 0, errors.New("command write failed")
+	}
+	return c.scriptedConn.Write(data)
+}
+
+type lateSuccessfulCommandConn struct {
+	*scriptedConn
+
+	controlMu sync.Mutex
+	blockNext bool
+	succeeded chan struct{}
+	release   chan struct{}
+	released  sync.Once
+}
+
+func newLateSuccessfulCommandConn() *lateSuccessfulCommandConn {
+	return &lateSuccessfulCommandConn{
+		scriptedConn: newScriptedConn(),
+		succeeded:    make(chan struct{}),
+		release:      make(chan struct{}),
+	}
+}
+
+func (c *lateSuccessfulCommandConn) armNextCommand() {
+	c.controlMu.Lock()
+	c.blockNext = true
+	c.controlMu.Unlock()
+}
+
+func (c *lateSuccessfulCommandConn) releaseWrite() {
+	c.released.Do(func() { close(c.release) })
+}
+
+func (c *lateSuccessfulCommandConn) Write(data []byte) (int, error) {
+	if !bytes.HasSuffix(data, []byte("\r\n")) {
+		return c.scriptedConn.Write(data)
+	}
+	c.controlMu.Lock()
+	block := c.blockNext
+	c.blockNext = false
+	c.controlMu.Unlock()
+
+	n, err := c.scriptedConn.Write(data)
+	if !block || err != nil {
+		return n, err
+	}
+	close(c.succeeded)
+	<-c.release
+	return n, err
+}
+
+func (c *lateSuccessfulCommandConn) Close() error {
+	return c.scriptedConn.Close()
+}
+
+type controlledCommandConn struct {
+	*scriptedConn
+
+	controlMu sync.RWMutex
+	fail      bool
+}
+
+func newControlledCommandConn() *controlledCommandConn {
+	return &controlledCommandConn{scriptedConn: newScriptedConn()}
+}
+
+func (c *controlledCommandConn) setCommandFailure(fail bool) {
+	c.controlMu.Lock()
+	c.fail = fail
+	c.controlMu.Unlock()
+}
+
+func (c *controlledCommandConn) Write(data []byte) (int, error) {
+	c.controlMu.RLock()
+	fail := c.fail
+	c.controlMu.RUnlock()
+	if fail && bytes.HasSuffix(data, []byte("\r\n")) {
 		return 0, errors.New("command write failed")
 	}
 	return c.scriptedConn.Write(data)

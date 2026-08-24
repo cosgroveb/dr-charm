@@ -115,25 +115,99 @@ func TestReducerInvalidTimestampAndDetachedSnapshot(t *testing.T) {
 	}
 }
 
-func TestRoomChangeClearsCreatureStatusAndReconnectReset(t *testing.T) {
+func TestRoomChangeClearsCreatureStatus(t *testing.T) {
 	t.Parallel()
 
 	reducer := newReducer("Hero")
-	for _, action := range newStreamDecoder().feed([]byte("<crtrStatus exist='9' hostile='1'/><nav rm='1'/><component id='exp Arcana'>Arcana: 10 0%</component>")) {
+	for _, action := range newStreamDecoder().feed([]byte("<crtrStatus exist='9' hostile='1'/><nav rm='1'/>")) {
 		reducer.apply(action)
 	}
 	if len(reducer.creatureStatuses) != 0 {
 		t.Fatal("room change retained creature status")
 	}
+}
+
+func TestReducerResetTransientReconstructsFreshState(t *testing.T) {
+	t.Parallel()
+
+	stamp := time.Unix(100, 0)
+	reducer := newReducer("Old Hero")
+	reducer.public = Snapshot{
+		Connection: ConnectionReady,
+		Character:  "Old Hero",
+		Room: Room{
+			ID: "1", Title: "Old Room", Description: "Old description",
+			Exits: []string{"north"}, Objects: []string{"bench"}, Players: []string{"Friend"},
+			Creatures: []string{"goblin"}, Compass: []string{"north"}, Image: "42",
+		},
+		Vitals:        Vitals{Health: 1, Mana: 2, Stamina: 3, Spirit: 4, Concentration: 5, Encumbrance: 6},
+		Timers:        Timers{Round: stamp, Cast: stamp.Add(time.Second), Spell: stamp.Add(2 * time.Second)},
+		Hands:         Hands{Left: "blade", Right: "shield"},
+		PreparedSpell: "Fire Ball",
+		Posture:       PostureProne,
+		Prompt:        ">",
+	}
+	reducer.pendingRoom = Room{
+		ID: "2", Title: "Pending", Description: "Pending description",
+		Exits: []string{"south"}, Objects: []string{"rock"}, Players: []string{"Other"},
+		Creatures: []string{"rat"}, Compass: []string{"south"}, Image: "7",
+	}
+	reducer.components["room title"] = "Old Room"
+	reducer.resources["mana"] = 100
+	reducer.indicators["ICONSTANDING"] = true
+	reducer.creatureStatuses["1"] = creatureStatus{hostile: true}
+	reducer.injuries["head"] = injuryReading{kind: "wound", severity: 2}
+	reducer.containers["stow"] = "Backpack"
+	reducer.containerTargets["stow"] = "#1"
+	reducer.skills["Arcana"] = 123
+	reducer.flags["LogOn"] = true
 	reducer.guild = "Moon Mage"
 	reducer.handNouns = Hands{Left: "blade", Right: "shield"}
 	reducer.handExists = Hands{Left: "1", Right: "2"}
-	reducer.resetTransient("Hero")
-	if reducer.guild != "Moon Mage" || reducer.skills["Arcana"] != 10 || reducer.snapshot().Room.Title != "" || reducer.snapshot().Connection != ConnectionConnected {
-		t.Fatalf("reconnect reset = %#v", reducer)
+	reducer.flagsCapture = flagsCapture{phase: captureStarted, deadline: stamp, lines: 12}
+	reducer.inExperience = true
+	reducer.newsCategory = "9"
+	skills := reducer.skills
+	skillsPointer := reflect.ValueOf(skills).Pointer()
+
+	reducer.resetTransient("New Hero")
+
+	wantSnapshot := Snapshot{Connection: ConnectionConnected, Character: "New Hero"}
+	if got := reducer.snapshot(); !reflect.DeepEqual(got, wantSnapshot) {
+		t.Fatalf("reset snapshot = %#v, want %#v", got, wantSnapshot)
 	}
-	if reducer.handNouns != (Hands{}) || reducer.handExists != (Hands{}) {
-		t.Fatalf("reconnect retained hand metadata: nouns %#v exists %#v", reducer.handNouns, reducer.handExists)
+	if !reflect.DeepEqual(reducer.pendingRoom, Room{}) {
+		t.Fatalf("pending room survived reset: %#v", reducer.pendingRoom)
+	}
+	if reducer.guild != "Moon Mage" || reducer.skills["Arcana"] != 123 || reflect.ValueOf(reducer.skills).Pointer() != skillsPointer {
+		t.Fatalf("durable state = guild %q skills %#v", reducer.guild, reducer.skills)
+	}
+	if reducer.components == nil || len(reducer.components) != 0 ||
+		reducer.resources == nil || len(reducer.resources) != 0 ||
+		reducer.indicators == nil || len(reducer.indicators) != 0 ||
+		reducer.creatureStatuses == nil || len(reducer.creatureStatuses) != 0 ||
+		reducer.injuries == nil || len(reducer.injuries) != 0 ||
+		reducer.containers == nil || len(reducer.containers) != 0 ||
+		reducer.containerTargets == nil || len(reducer.containerTargets) != 0 ||
+		reducer.flags == nil || len(reducer.flags) != 0 {
+		t.Fatalf("transient maps were not replaced with empty maps: %#v", reducer)
+	}
+	if reducer.handNouns != (Hands{}) || reducer.handExists != (Hands{}) || reducer.flagsCapture != (flagsCapture{}) || reducer.inExperience || reducer.newsCategory != "" {
+		t.Fatalf("private transient state survived reset: %#v", reducer)
+	}
+}
+
+func TestReducerPublishesReadinessOnce(t *testing.T) {
+	t.Parallel()
+
+	reducer := newReducer("Hero")
+	action := protocolAction{events: []protocolEvent{{kind: eventSettingsInfo}}}
+	update, publish := reducer.apply(action)
+	if !publish || update.Snapshot.Connection != ConnectionReady {
+		t.Fatalf("first settings info = update %#v, publish %v", update, publish)
+	}
+	if update, publish := reducer.apply(action); publish {
+		t.Fatalf("duplicate settings info published %#v", update)
 	}
 }
 
@@ -258,33 +332,39 @@ func TestFlagsCaptureWaitsForMainStreamReportAndStopsAfterItStarts(t *testing.T)
 
 	now := time.Unix(100, 0)
 	reducer := newReducer("Hero")
-	reducer.armFlags(now)
-
-	ordinary := DisplayEvent{Kind: DisplayText, Stream: "main", Text: "A bell rings."}
-	update, publish := reducer.applyAt(protocolAction{events: []protocolEvent{{kind: eventDisplay, display: ordinary}}}, now.Add(time.Second))
-	if !publish || len(update.Display) != 1 || !reducer.flagsCapture {
-		t.Fatalf("pre-report game line ended capture: update %#v, active %v", update, reducer.flagsCapture)
+	update, publish := reduceTextAt(reducer, "main", "LogOn ON", now)
+	if !publish || len(update.Display) != 1 || reducer.flags["LogOn"] {
+		t.Fatalf("inactive capture changed input: update %#v, flags %#v", update, reducer.flags)
 	}
 
-	familiar := DisplayEvent{Kind: DisplayText, Stream: "familiar", Text: "LogOn ON"}
-	update, publish = reducer.applyAt(protocolAction{events: []protocolEvent{{kind: eventDisplay, display: familiar}}}, now.Add(2*time.Second))
-	if !publish || len(update.Display) != 1 || len(reducer.flags) != 0 || !reducer.flagsCapture {
+	reducer.armFlags(now)
+	update, publish = reduceTextAt(reducer, "main", "A bell rings.", now.Add(time.Second))
+	if !publish || len(update.Display) != 1 {
+		t.Fatalf("waiting capture hid ordinary main line: %#v", update)
+	}
+
+	update, publish = reduceTextAt(reducer, "familiar", "LogOn ON", now.Add(2*time.Second))
+	if !publish || len(update.Display) != 1 || len(reducer.flags) != 0 {
 		t.Fatalf("non-main stream entered flags report: update %#v, flags %#v", update, reducer.flags)
 	}
 
 	for _, line := range []string{"Usage", "LogOn ON", "RoomNames OFF"} {
-		update, publish = reducer.applyAt(protocolAction{events: []protocolEvent{{kind: eventDisplay, display: DisplayEvent{Kind: DisplayText, Stream: "main", Text: line}}}}, now.Add(3*time.Second))
+		update, publish = reduceTextAt(reducer, "main", line, now.Add(3*time.Second))
 		if publish || len(update.Display) != 0 {
 			t.Fatalf("flags report line %q was displayed: %#v", line, update)
 		}
 	}
-	if !reducer.flags["LogOn"] || reducer.flags["RoomNames"] || !reducer.flagsCapture {
+	if !reducer.flags["LogOn"] || reducer.flags["RoomNames"] {
 		t.Fatalf("captured flags = %#v", reducer.flags)
 	}
 
-	update, publish = reducer.applyAt(protocolAction{events: []protocolEvent{{kind: eventDisplay, display: ordinary}}}, now.Add(4*time.Second))
-	if !publish || len(update.Display) != 1 || reducer.flagsCapture {
-		t.Fatalf("post-report ordinary line did not finish capture: update %#v, active %v", update, reducer.flagsCapture)
+	update, publish = reduceTextAt(reducer, "main", "A bell rings.", now.Add(4*time.Second))
+	if !publish || len(update.Display) != 1 {
+		t.Fatalf("first post-report line was not visible: %#v", update)
+	}
+	update, publish = reduceTextAt(reducer, "main", "RoomNames ON", now.Add(5*time.Second))
+	if !publish || len(update.Display) != 1 || reducer.flags["RoomNames"] {
+		t.Fatalf("post-report input remained captured: update %#v, flags %#v", update, reducer.flags)
 	}
 }
 
@@ -296,7 +376,7 @@ func TestFlagsCaptureRecognizesEveryFlagAndHonorsDeadline(t *testing.T) {
 	reducer.armFlags(now)
 	for lower, canonical := range knownFlags {
 		line := canonical + " ON"
-		if _, publish := reducer.applyAt(protocolAction{events: []protocolEvent{{kind: eventDisplay, display: DisplayEvent{Kind: DisplayText, Stream: "main", Text: line}}}}, now.Add(time.Second)); publish {
+		if _, publish := reduceTextAt(reducer, "main", line, now.Add(time.Second)); publish {
 			t.Fatalf("known flag %q was displayed", canonical)
 		}
 		if !reducer.flags[canonical] || strings.ToLower(canonical) != lower {
@@ -304,11 +384,86 @@ func TestFlagsCaptureRecognizesEveryFlagAndHonorsDeadline(t *testing.T) {
 		}
 	}
 
+	reducer.flags["RoomNames"] = false
 	reducer.armFlags(now)
-	update, publish := reducer.applyAt(protocolAction{events: []protocolEvent{{kind: eventDisplay, display: DisplayEvent{Kind: DisplayText, Stream: "main", Text: "LogOn OFF"}}}}, now.Add(8*time.Second))
-	if !publish || len(update.Display) != 1 || reducer.flagsCapture {
-		t.Fatalf("deadline did not release line: update %#v, active %v", update, reducer.flagsCapture)
+	update, publish := reduceTextAt(reducer, "main", "LogOn OFF", now.Add(8*time.Second))
+	if !publish || len(update.Display) != 1 || !reducer.flags["LogOn"] {
+		t.Fatalf("deadline did not release line unchanged: update %#v, flags %#v", update, reducer.flags)
 	}
+	update, publish = reduceTextAt(reducer, "main", "RoomNames ON", now.Add(time.Second))
+	if !publish || len(update.Display) != 1 || reducer.flags["RoomNames"] {
+		t.Fatalf("deadline stop did not remain inactive: update %#v, flags %#v", update, reducer.flags)
+	}
+}
+
+func TestFlagsCaptureStopsAtLineLimit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	reducer := newReducer("Hero")
+	reducer.armFlags(now)
+	for line := 1; line <= 80; line++ {
+		update, publish := reduceTextAt(reducer, "main", "ordinary", now.Add(time.Second))
+		if !publish || len(update.Display) != 1 {
+			t.Fatalf("line %d was hidden: %#v", line, update)
+		}
+	}
+	update, publish := reduceTextAt(reducer, "main", "LogOn ON", now.Add(time.Second))
+	if !publish || len(update.Display) != 1 || reducer.flags["LogOn"] {
+		t.Fatalf("line 81 remained captured: update %#v, flags %#v", update, reducer.flags)
+	}
+	update, publish = reduceTextAt(reducer, "main", "RoomNames ON", now.Add(time.Second))
+	if !publish || len(update.Display) != 1 || reducer.flags["RoomNames"] {
+		t.Fatalf("line-limit stop did not remain inactive: update %#v, flags %#v", update, reducer.flags)
+	}
+}
+
+func TestFlagsCaptureFooterStopsCapture(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	reducer := newReducer("Hero")
+	reducer.armFlags(now)
+	if _, publish := reduceTextAt(reducer, "main", "Usage", now.Add(time.Second)); publish {
+		t.Fatal("flags header was displayed")
+	}
+	if _, publish := reduceTextAt(reducer, "main", "For other setting options use HELP", now.Add(2*time.Second)); publish {
+		t.Fatal("flags footer was displayed")
+	}
+	update, publish := reduceTextAt(reducer, "main", "LogOn ON", now.Add(3*time.Second))
+	if !publish || len(update.Display) != 1 || reducer.flags["LogOn"] {
+		t.Fatalf("footer did not stop capture: update %#v, flags %#v", update, reducer.flags)
+	}
+}
+
+func TestFlagsCaptureStartsOnRecognizedFlag(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	reducer := newReducer("Hero")
+	reducer.armFlags(now)
+	if _, publish := reduceTextAt(reducer, "main", "LogOn ON", now.Add(time.Second)); publish {
+		t.Fatal("recognized flag was displayed")
+	}
+	update, publish := reduceTextAt(reducer, "main", "ordinary", now.Add(2*time.Second))
+	if !publish || len(update.Display) != 1 {
+		t.Fatalf("first post-flag line was not visible: %#v", update)
+	}
+	update, publish = reduceTextAt(reducer, "main", "RoomNames ON", now.Add(3*time.Second))
+	if !publish || len(update.Display) != 1 || reducer.flags["RoomNames"] {
+		t.Fatalf("recognized flag did not start then stop capture: update %#v, flags %#v", update, reducer.flags)
+	}
+}
+
+func reduceTextAt(reducer *reducer, stream, text string, now time.Time) (Update, bool) {
+	return reducer.applyAt(protocolAction{events: []protocolEvent{{
+		kind: eventDisplay,
+		display: DisplayEvent{
+			Kind:   DisplayText,
+			Stream: stream,
+			Text:   text,
+		},
+	}}}, now)
 }
 
 func TestNervousSystemPhrasesRequireMainStream(t *testing.T) {

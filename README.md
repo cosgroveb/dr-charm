@@ -78,8 +78,34 @@ Keys:
 - `Ctrl+C`: quit
 
 Logs are written under `~/.dr-charm/logs/`. They contain game output and player
-commands, so protect them like other account data. Custom themes are JSON files
-under `~/.dr-charm/themes/`.
+commands, so protect them like other account data.
+
+Custom themes are JSON files under `~/.dr-charm/themes/`. Each file contains
+one flat object:
+
+```json
+{
+  "name": "green-screen",
+  "foreground": "46",
+  "border": "22",
+  "title_bar": "46",
+  "status_bar": "0",
+  "status_bar_bg": "46",
+  "border_type": "double",
+  "padding": 1
+}
+```
+
+Set `name` to a nonempty string. The loader trims surrounding whitespace. The
+other keys are optional. `border_type` accepts `normal`, `hidden`, `thick`,
+`double`, or `rounded`. An empty or unknown `border_type` uses the rounded
+border. The loader ignores files with unknown keys, nested legacy objects, or
+additional JSON values.
+
+The loader places custom themes after `default`, `dark`, and `high-contrast` in
+lexical filename order. When two files use the same theme name, the value from
+the later filename replaces the earlier value in the same position. A custom
+file can replace a built-in theme without moving its position.
 
 ## Architecture
 
@@ -111,12 +137,6 @@ falls back to a fake or skips when selected:
 DR_E2E_CONFIG=/path/to/config.yaml \
   go test -tags=e2e ./cmd/dr-charm \
   -run TestDragonRealmsEndToEnd -count=1 -timeout=60s
-```
-
-Dagger exposes the same CI stages:
-
-```sh
-dagger call ci --source .
 ```
 
 ## License

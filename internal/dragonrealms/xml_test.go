@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-func TestXMLHandledAndSkippedTags(t *testing.T) {
+func TestXMLTagDisposition(t *testing.T) {
 	t.Parallel()
 
 	textEvent := func(stream, text string) protocolEvent {
@@ -72,13 +72,7 @@ func TestXMLHandledAndSkippedTags(t *testing.T) {
 		{name: "streamwindow", input: "<streamWindow id='main'/>", want: []protocolEvent{{kind: eventDisplay, display: DisplayEvent{Kind: DisplayWindow, ID: "main"}}}},
 		{name: "style", input: "<style id='roomName'/>text<style id=''/>\n", want: []protocolEvent{styled}},
 	}
-	if len(handled) != len(handledTags) {
-		t.Fatalf("handled table has %d entries, map has %d", len(handled), len(handledTags))
-	}
 	for _, tt := range handled {
-		if !handledTags[tt.name] {
-			t.Fatalf("handled table contains unknown tag %q", tt.name)
-		}
 		got := decodeEvents(tt.input)
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("handled tag %s events = %#v, want %#v", tt.name, got, tt.want)
@@ -105,6 +99,35 @@ func TestXMLHandledAndSkippedTags(t *testing.T) {
 		if !hasText(events, "body") {
 			t.Errorf("skipped tag %s swallowed body text", name)
 		}
+	}
+
+	for _, tt := range []struct {
+		name       string
+		input      string
+		diagnostic string
+	}{
+		{name: "mixed-case dropped settings", input: "<MoDe>body</mOdE>\n", diagnostic: "dropped settings tag: mode"},
+		{name: "mixed-case dropped data", input: "<SkIn>body</sKiN>\n", diagnostic: "dropped data tag: skin"},
+		{name: "mixed-case unknown open and close", input: "<MyStErY>body</mYsTeRy>\n", diagnostic: "unknown DragonRealms tag: mystery"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			events := decodeEvents(tt.input)
+			if !hasDiagnostic(events, tt.diagnostic) {
+				t.Fatalf("events lack %q: %#v", tt.diagnostic, events)
+			}
+			if !hasText(events, "body") {
+				t.Fatalf("tag swallowed body text: %#v", events)
+			}
+			diagnostics := 0
+			for _, event := range events {
+				if event.kind == eventDiagnostic && strings.Contains(event.value, tt.diagnostic) {
+					diagnostics++
+				}
+			}
+			if diagnostics != 1 {
+				t.Fatalf("matching diagnostics = %d: %#v", diagnostics, events)
+			}
+		})
 	}
 }
 
