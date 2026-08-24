@@ -7,21 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 )
 
 type protocolServers struct {
-	t       *testing.T
-	sge     net.Listener
-	game    net.Listener
-	errors  chan error
-	wg      sync.WaitGroup
-	close   sync.Once
-	wait    sync.Once
-	waitErr error
+	sge    net.Listener
+	game   net.Listener
+	done   chan struct{}
+	result error
+	close  sync.Once
 }
 
 func startProtocolServers(t *testing.T) *protocolServers {
@@ -35,15 +31,16 @@ func startProtocolServers(t *testing.T) *protocolServers {
 		game.Close()
 		t.Fatal(err)
 	}
-	servers := &protocolServers{t: t, sge: sge, game: game, errors: make(chan error, 2)}
-	servers.wg.Add(2)
+	servers := &protocolServers{sge: sge, game: game, done: make(chan struct{})}
 	go func() {
-		defer servers.wg.Done()
-		servers.errors <- servers.serveSGE()
-	}()
-	go func() {
-		defer servers.wg.Done()
-		servers.errors <- servers.serveGame()
+		defer close(servers.done)
+		servers.result = servers.serveSGE()
+		if servers.result == nil {
+			servers.result = servers.serveGame()
+		}
+		if errors.Is(servers.result, net.ErrClosed) {
+			servers.result = nil
+		}
 	}()
 	return servers
 }
@@ -158,15 +155,8 @@ func (s *protocolServers) serveGame() error {
 }
 
 func (s *protocolServers) Wait() error {
-	s.wait.Do(func() {
-		s.wg.Wait()
-		for i := 0; i < 2; i++ {
-			if err := <-s.errors; err != nil && !errors.Is(err, net.ErrClosed) && s.waitErr == nil {
-				s.waitErr = err
-			}
-		}
-	})
-	return s.waitErr
+	<-s.done
+	return s.result
 }
 
 func (s *protocolServers) Close() {
@@ -186,10 +176,4 @@ func expectLine(reader *bufio.Reader, want string) error {
 		return fmt.Errorf("protocol line differed: got %q, want %q", got, want)
 	}
 	return nil
-}
-
-func listenerPort(listener net.Listener) int {
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	value, _ := strconv.Atoi(port)
-	return value
 }

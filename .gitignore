@@ -34,10 +34,6 @@ go.work.sum
 # Test files
 test_commands.txt
 
-# Dagger generated files
-.dagger/dagger.gen.go
-.dagger/internal/
-
 # Temporary files
 tmp/
 

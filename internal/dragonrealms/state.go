@@ -20,10 +20,23 @@ type injuryReading struct {
 	severity int
 }
 
+type flagsPhase uint8
+
+const (
+	captureInactive flagsPhase = iota
+	captureWaiting
+	captureStarted
+)
+
+type flagsCapture struct {
+	phase    flagsPhase
+	deadline time.Time
+	lines    int
+}
+
 type reducer struct {
 	public      Snapshot
 	pendingRoom Room
-	ready       bool
 
 	components       map[string]string
 	resources        map[string]int
@@ -38,12 +51,9 @@ type reducer struct {
 	handNouns        Hands
 	handExists       Hands
 
-	flagsCapture  bool
-	flagsStarted  bool
-	flagsDeadline time.Time
-	flagsLines    int
-	inExperience  bool
-	newsCategory  string
+	flagsCapture flagsCapture
+	inExperience bool
+	newsCategory string
 }
 
 var (
@@ -65,24 +75,18 @@ var knownFlags = func() map[string]string {
 }()
 
 func newReducer(character string) *reducer {
-	r := &reducer{}
-	r.resetMaps()
-	r.public = Snapshot{Connection: ConnectionConnected, Character: character}
-	return r
-}
-
-func (r *reducer) resetMaps() {
-	r.components = make(map[string]string)
-	r.resources = make(map[string]int)
-	r.indicators = make(map[string]bool)
-	r.creatureStatuses = make(map[string]creatureStatus)
-	r.injuries = make(map[string]injuryReading)
-	r.containers = make(map[string]string)
-	r.containerTargets = make(map[string]string)
-	if r.skills == nil {
-		r.skills = make(map[string]int)
+	return &reducer{
+		public:           Snapshot{Connection: ConnectionConnected, Character: character},
+		components:       make(map[string]string),
+		resources:        make(map[string]int),
+		indicators:       make(map[string]bool),
+		creatureStatuses: make(map[string]creatureStatus),
+		injuries:         make(map[string]injuryReading),
+		containers:       make(map[string]string),
+		containerTargets: make(map[string]string),
+		skills:           make(map[string]int),
+		flags:            make(map[string]bool),
 	}
-	r.flags = make(map[string]bool)
 }
 
 func (r *reducer) apply(action protocolAction) (Update, bool) {
@@ -174,8 +178,7 @@ func (r *reducer) applyAt(action protocolAction, now time.Time) (Update, bool) {
 			r.public.Prompt = event.value
 			publish = true
 		case eventSettingsInfo:
-			if !r.ready {
-				r.ready = true
+			if r.public.Connection != ConnectionReady {
 				r.public.Connection = ConnectionReady
 				r.armFlags(now)
 				publish = true
@@ -284,32 +287,29 @@ func (r *reducer) applyPosture(name string) bool {
 
 func (r *reducer) applyText(display DisplayEvent, now time.Time) (DisplayEvent, bool) {
 	text := display.Text
-	if r.flagsCapture && display.Stream == "main" {
-		if !now.Before(r.flagsDeadline) || r.flagsLines >= 80 {
-			r.flagsCapture = false
-			r.flagsStarted = false
+	if r.flagsCapture.phase != captureInactive && display.Stream == "main" {
+		if !now.Before(r.flagsCapture.deadline) || r.flagsCapture.lines >= 80 {
+			r.flagsCapture = flagsCapture{}
 		} else {
-			r.flagsLines++
+			r.flagsCapture.lines++
 			if match := flagPattern.FindStringSubmatch(text); len(match) == 3 {
 				if canonical, ok := knownFlags[strings.ToLower(match[1])]; ok {
 					r.flags[canonical] = strings.EqualFold(match[2], "ON")
-					r.flagsStarted = true
+					r.flagsCapture.phase = captureStarted
 					return display, true
 				}
 			}
 			lower := strings.ToLower(strings.TrimSpace(text))
 			if lower == "usage" || lower == "example" || strings.HasPrefix(lower, "flag ") || strings.HasPrefix(lower, "flag names may be abbreviated") || strings.HasPrefix(lower, "flag") && strings.Contains(lower, "status") && strings.Contains(lower, "behavior") {
-				r.flagsStarted = true
+				r.flagsCapture.phase = captureStarted
 				return display, true
 			}
 			if strings.HasPrefix(lower, "for other setting options") {
-				r.flagsCapture = false
-				r.flagsStarted = false
+				r.flagsCapture = flagsCapture{}
 				return display, true
 			}
-			if r.flagsStarted {
-				r.flagsCapture = false
-				r.flagsStarted = false
+			if r.flagsCapture.phase == captureStarted {
+				r.flagsCapture = flagsCapture{}
 			}
 		}
 	}
@@ -370,10 +370,7 @@ func (r *reducer) applyText(display DisplayEvent, now time.Time) (DisplayEvent, 
 }
 
 func (r *reducer) armFlags(now time.Time) {
-	r.flagsCapture = true
-	r.flagsStarted = false
-	r.flagsDeadline = now.Add(8 * time.Second)
-	r.flagsLines = 0
+	r.flagsCapture = flagsCapture{phase: captureWaiting, deadline: now.Add(8 * time.Second)}
 }
 
 func (r *reducer) snapshot() Snapshot {
@@ -383,18 +380,9 @@ func (r *reducer) snapshot() Snapshot {
 func (r *reducer) resetTransient(character string) {
 	guild := r.guild
 	skills := r.skills
-	r.public = Snapshot{Connection: ConnectionConnected, Character: character}
-	r.pendingRoom = Room{}
-	r.ready = false
+	*r = *newReducer(character)
 	r.guild = guild
 	r.skills = skills
-	r.flagsCapture = false
-	r.flagsStarted = false
-	r.inExperience = false
-	r.newsCategory = ""
-	r.handNouns = Hands{}
-	r.handExists = Hands{}
-	r.resetMaps()
 }
 
 func cloneRoom(room Room) Room {

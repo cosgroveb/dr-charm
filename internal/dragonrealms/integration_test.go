@@ -9,6 +9,9 @@ import (
 func TestSessionIntegration(t *testing.T) {
 	servers := startProtocolServers(t)
 	defer servers.Close()
+	if servers.sge.Addr().String() == servers.game.Addr().String() {
+		t.Fatal("SGE and game servers share an endpoint")
+	}
 
 	options := servers.SessionOptions()
 	session, err := dialWithOptions(context.Background(), Credentials{Account: "test", Password: "pass", Character: "Hero"}, options)
@@ -42,6 +45,30 @@ func TestSessionIntegration(t *testing.T) {
 	if err := servers.Wait(); err != nil {
 		t.Fatal(err)
 	}
+	if err := servers.Wait(); err != nil {
+		t.Fatal(err)
+	}
 	for range session.Updates() {
+	}
+}
+
+func TestProtocolServersClose(t *testing.T) {
+	servers := startProtocolServers(t)
+	done := make(chan []error, 1)
+	go func() {
+		servers.Close()
+		servers.Close()
+		done <- []error{servers.Wait(), servers.Wait()}
+	}()
+
+	select {
+	case errs := <-done:
+		for _, err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closing protocol servers timed out")
 	}
 }

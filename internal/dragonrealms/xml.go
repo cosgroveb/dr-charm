@@ -22,33 +22,34 @@ var (
 	barePromptPattern = regexp.MustCompile(`^[A-Z]*>$`)
 )
 
-var handledTags = map[string]bool{
-	"a": true, "app": true, "b": true, "casttime": true, "cleardynastream": true,
-	"clearstream": true, "compass": true, "component": true, "container": true,
-	"crtrstatus": true, "d": true, "dialogdata": true, "dir": true, "endsetup": true,
-	"image": true, "indicator": true, "inv": true, "left": true, "nav": true,
-	"openwindow": true, "output": true, "popbold": true, "popstream": true,
-	"preset": true, "progressbar": true, "prompt": true, "pushbold": true,
-	"pushstream": true, "resource": true, "right": true, "roundtime": true,
-	"settingsinfo": true, "spell": true, "spelltime": true, "streamwindow": true,
-	"style": true,
-}
+type tagDropClass uint8
 
-var droppedDataTags = map[string]bool{
-	"skin": true, "compdef": true, "opendialog": true, "radio": true, "detach": true,
-	"playerid": true, "exposecontainer": true, "clearcontainer": true, "menuimage": true,
-	"closedialog": true, "exposedialog": true, "menulink": true, "label": true,
-	"cmdbutton": true, "closebutton": true, "checkbox": true, "streambox": true,
-	"dropdownbox": true, "editbox": true, "updowneditbox": true,
-}
+const (
+	dropSettings tagDropClass = iota
+	dropData
+)
 
-var skippedTags = func() map[string]bool {
-	result := make(map[string]bool)
-	for _, tag := range strings.Fields("mode settings presets p macros keys k palette i stream w cmdline strings names ignores vars scripts dialog builtin panels group toggles misc m display options o font s playerid opendialog detach skin radio menuimage closedialog exposedialog label cmdbutton closebutton checkbox streambox dropdownbox editbox updowneditbox switchquickbar link menulink forging exposecontainer clearcontainer compdef") {
-		result[tag] = true
-	}
-	return result
-}()
+var droppedTags = map[string]tagDropClass{
+	"mode": dropSettings, "settings": dropSettings, "presets": dropSettings,
+	"p": dropSettings, "macros": dropSettings, "keys": dropSettings,
+	"k": dropSettings, "palette": dropSettings, "i": dropSettings,
+	"stream": dropSettings, "w": dropSettings, "cmdline": dropSettings,
+	"strings": dropSettings, "names": dropSettings, "ignores": dropSettings,
+	"vars": dropSettings, "scripts": dropSettings, "dialog": dropSettings,
+	"builtin": dropSettings, "panels": dropSettings, "group": dropSettings,
+	"toggles": dropSettings, "misc": dropSettings, "m": dropSettings,
+	"display": dropSettings, "options": dropSettings, "o": dropSettings,
+	"font": dropSettings, "s": dropSettings, "switchquickbar": dropSettings,
+	"link": dropSettings, "forging": dropSettings,
+
+	"skin": dropData, "compdef": dropData, "opendialog": dropData,
+	"radio": dropData, "detach": dropData, "playerid": dropData,
+	"exposecontainer": dropData, "clearcontainer": dropData, "menuimage": dropData,
+	"closedialog": dropData, "exposedialog": dropData, "menulink": dropData,
+	"label": dropData, "cmdbutton": dropData, "closebutton": dropData,
+	"checkbox": dropData, "streambox": dropData, "dropdownbox": dropData,
+	"editbox": dropData, "updowneditbox": dropData,
+}
 
 type openSpan struct {
 	start  int
@@ -312,15 +313,12 @@ func (d *streamDecoder) handleMarkup(raw []byte) []protocolEvent {
 	if closing {
 		return d.handleClose(name)
 	}
-	if skippedTags[name] {
+	if class, dropped := droppedTags[name]; dropped {
 		kind := "dropped settings"
-		if droppedDataTags[name] {
+		if class == dropData {
 			kind = "dropped data"
 		}
 		return []protocolEvent{{kind: eventDiagnostic, value: kind + " tag: " + sanitizeDiagnostic(name)}}
-	}
-	if !handledTags[name] {
-		return []protocolEvent{{kind: eventDiagnostic, value: "unknown DragonRealms tag: " + sanitizeDiagnostic(name)}}
 	}
 
 	var events []protocolEvent
@@ -506,6 +504,8 @@ func (d *streamDecoder) handleMarkup(raw []byte) []protocolEvent {
 		}
 	case "output":
 		d.mono = strings.EqualFold(attrs["class"], "mono")
+	default:
+		events = append(events, protocolEvent{kind: eventDiagnostic, value: "unknown DragonRealms tag: " + sanitizeDiagnostic(name)})
 	}
 	return events
 }

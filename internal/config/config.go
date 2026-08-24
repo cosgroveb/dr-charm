@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,18 +20,6 @@ type Config struct {
 
 // Load applies config-file discovery, environment overrides, and validation.
 func Load(explicitPath string) (*Config, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("find home directory: %w", err)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("find working directory: %w", err)
-	}
-	return load(explicitPath, cwd, home, os.Getenv)
-}
-
-func load(explicitPath, cwd, home string, getenv func(string) string) (*Config, error) {
 	cfg := &Config{}
 	if explicitPath != "" {
 		loaded, err := LoadFromFile(explicitPath)
@@ -38,25 +28,35 @@ func load(explicitPath, cwd, home string, getenv func(string) string) (*Config, 
 		}
 		cfg = loaded
 	} else {
-		paths := []string{
-			filepath.Join(cwd, ".dr-charm.yaml"),
-			filepath.Join(home, ".dr-charm", "config.yaml"),
-			filepath.Join(home, ".config", "dr-charm", "config.yaml"),
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("find working directory: %w", err)
 		}
-		for _, path := range paths {
-			_, err := os.Stat(path)
-			if err != nil {
-				if os.IsNotExist(err) {
-					continue
-				}
-				return nil, fmt.Errorf("inspect config file %s: %w", path, err)
-			}
-			loaded, err := LoadFromFile(path)
-			if err != nil {
-				return nil, err
-			}
+		loaded, err := LoadFromFile(filepath.Join(cwd, ".dr-charm.yaml"))
+		if err == nil {
 			cfg = loaded
-			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, fmt.Errorf("find home directory: %w", err)
+			}
+			paths := []string{
+				filepath.Join(home, ".dr-charm", "config.yaml"),
+				filepath.Join(home, ".config", "dr-charm", "config.yaml"),
+			}
+			for _, path := range paths {
+				loaded, err := LoadFromFile(path)
+				if err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						continue
+					}
+					return nil, err
+				}
+				cfg = loaded
+				break
+			}
 		}
 	}
 
@@ -65,7 +65,7 @@ func load(explicitPath, cwd, home string, getenv func(string) string) (*Config, 
 		"DR_PASSWORD":  &cfg.Password,
 		"DR_CHARACTER": &cfg.Character,
 	} {
-		if value := getenv(key); value != "" {
+		if value := os.Getenv(key); value != "" {
 			*target = value
 		}
 	}

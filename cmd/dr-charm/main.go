@@ -44,11 +44,14 @@ func run(args []string) error {
 
 	session, model, err := newApplication(ctx, *cfg)
 	if err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	defer session.Close()
 
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithoutSignalHandler())
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("run terminal UI: %w", err)
 	}
