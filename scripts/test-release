@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/dr-charm-release-test.XXXXXX")"
+trap 'rm -rf -- "$work_dir"' EXIT
+
+version=0.1.0
+for arch in amd64 arm64; do
+  DIST_DIR="$work_dir/dist" "$root_dir/scripts/build-archive" "$version" "$arch"
+  archive="$work_dir/dist/dr-charm_${version}_darwin_${arch}.tar.gz"
+  expected="dr-charm_${version}_darwin_${arch}/
+dr-charm_${version}_darwin_${arch}/LICENSE
+dr-charm_${version}_darwin_${arch}/README.md
+dr-charm_${version}_darwin_${arch}/dr-charm"
+  actual="$(tar -tzf "$archive" | LC_ALL=C sort)"
+  if [ "$actual" != "$expected" ]; then
+    printf 'archive contents mismatch for %s:\n%s\n' "$arch" "$actual" >&2
+    exit 1
+  fi
+done
+
+arm64_sha256="$(shasum -a 256 "$work_dir/dist/dr-charm_${version}_darwin_arm64.tar.gz" | awk '{print $1}')"
+amd64_sha256="$(shasum -a 256 "$work_dir/dist/dr-charm_${version}_darwin_amd64.tar.gz" | awk '{print $1}')"
+formula="$work_dir/Formula/dr-charm.rb"
+"$root_dir/scripts/write-homebrew-formula" "$formula" "$version" "$arm64_sha256" "$amd64_sha256"
+ruby -c "$formula" >/dev/null
+grep -F "version \"$version\"" "$formula" >/dev/null
+grep -F "$arm64_sha256" "$formula" >/dev/null
+grep -F "$amd64_sha256" "$formula" >/dev/null

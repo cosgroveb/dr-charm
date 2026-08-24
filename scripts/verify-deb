@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 4 ]; then
+  printf 'usage: %s PACKAGE VERSION SUITE ARCH\n' "$0" >&2
+  exit 2
+fi
+
+package_path="$1"
+version="$2"
+suite="$3"
+arch="$4"
+if [ ! -f "$package_path" ]; then
+  printf 'package does not exist: %s\n' "$package_path" >&2
+  exit 1
+fi
+
+expect_field() {
+  local field="$1"
+  local expected="$2"
+  local actual
+  actual="$(dpkg-deb -f "$package_path" "$field")"
+  if [ "$actual" != "$expected" ]; then
+    printf '%s mismatch: expected %s, got %s\n' "$field" "$expected" "$actual" >&2
+    exit 1
+  fi
+}
+
+expect_field Package dr-charm
+expect_field Version "${version}-1~${suite}"
+expect_field Architecture "$arch"
+expect_field Depends ca-certificates
+
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/dr-charm-verify.XXXXXX")"
+trap 'rm -rf -- "$work_dir"' EXIT
+dpkg-deb -x "$package_path" "$work_dir/root"
+dpkg-deb -e "$package_path" "$work_dir/control"
+
+expected_paths='usr
+usr/bin
+usr/bin/dr-charm
+usr/share
+usr/share/doc
+usr/share/doc/dr-charm
+usr/share/doc/dr-charm/README.md
+usr/share/doc/dr-charm/changelog.Debian.gz
+usr/share/doc/dr-charm/copyright'
+actual_paths="$(cd "$work_dir/root" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort)"
+if [ "$actual_paths" != "$expected_paths" ]; then
+  printf 'unexpected package paths:\n%s\n' "$actual_paths" >&2
+  exit 1
+fi
+
+test -x "$work_dir/root/usr/bin/dr-charm"
+if [ "$("$work_dir/root/usr/bin/dr-charm" -version)" != "dr-charm $version" ]; then
+  printf 'installed binary reported an unexpected version\n' >&2
+  exit 1
+fi
+(cd "$work_dir/root" && md5sum --check ../control/md5sums >/dev/null)

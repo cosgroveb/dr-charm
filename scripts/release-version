@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ]; then
+  printf 'usage: %s TAG\n' "$0" >&2
+  exit 2
+fi
+
+tag="$1"
+if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  printf 'release tag must be vMAJOR.MINOR.PATCH: %s\n' "$tag" >&2
+  exit 1
+fi
+
+printf '%s\n' "${tag#v}"

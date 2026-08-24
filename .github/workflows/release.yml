@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release tag
+        run: scripts/release-version "$GITHUB_REF_NAME"
+      - name: Test
+        run: make test test-release
+
+  debian:
+    needs: test
+    name: Build ${{ matrix.suite.name }} ${{ matrix.runner.arch }} package
+    runs-on: ${{ matrix.runner.label }}
+    container: ${{ matrix.suite.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: trixie
+            image: debian:trixie
+          - name: noble
+            image: ubuntu:noble
+        runner:
+          - arch: amd64
+            label: ubuntu-latest
+          - arch: arm64
+            label: ubuntu-24.04-arm
+    steps:
+      - name: Install package tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends dpkg-dev file git lintian
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and verify package
+        run: |
+          actual_arch="$(dpkg --print-architecture)"
+          if [ "$actual_arch" != "${{ matrix.runner.arch }}" ]; then
+            printf 'runner architecture mismatch: expected %s, got %s\n' \
+              "${{ matrix.runner.arch }}" "$actual_arch" >&2
+            exit 1
+          fi
+          version="$(scripts/release-version "$GITHUB_REF_NAME")"
+          package="$(scripts/build-deb "$version" "${{ matrix.suite.name }}")"
+          lintian -iIEcv --pedantic "$package"
+          apt-get install -y "./$package"
+          test "$(dr-charm -version)" = "dr-charm $version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.suite.name }}-${{ matrix.runner.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  macos:
+    needs: test
+    name: Build Darwin ${{ matrix.goarch }} archive
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build archive
+        run: |
+          version="$(scripts/release-version "$GITHUB_REF_NAME")"
+          scripts/build-archive "$version" "${{ matrix.goarch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [debian, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-*
+          path: dist
+          merge-multiple: true
+      - name: Publish immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          (
+            cd dist
+            sha256sum ./* > SHA256SUMS
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            expected="$(find dist -maxdepth 1 -type f -printf '%f\n' | sort)"
+            actual="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
+            if [ "$actual" != "$expected" ]; then
+              printf 'existing release assets differ from this release build\n' >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          gh release create "$tag" --title "$tag" --generate-notes dist/*
+
+  homebrew:
+    needs: publish
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: darwin-*
+          path: dist
+          merge-multiple: true
+      - name: Require tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: test -n "$HOMEBREW_TAP_TOKEN"
+      - uses: actions/checkout@v7
+        with:
+          repository: cosgroveb/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - name: Update and verify Formula
+        run: |
+          set -euo pipefail
+          version="$(scripts/release-version "$GITHUB_REF_NAME")"
+          arm64_sha256="$(shasum -a 256 "dist/dr-charm_${version}_darwin_arm64.tar.gz" | awk '{print $1}')"
+          amd64_sha256="$(shasum -a 256 "dist/dr-charm_${version}_darwin_amd64.tar.gz" | awk '{print $1}')"
+          scripts/write-homebrew-formula \
+            homebrew-tap/Formula/dr-charm.rb "$version" \
+            "$arm64_sha256" "$amd64_sha256"
+          brew audit --strict --online homebrew-tap/Formula/dr-charm.rb
+          brew install homebrew-tap/Formula/dr-charm.rb
+          brew test dr-charm
+          cd homebrew-tap
+          git diff --check
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Formula/dr-charm.rb
+          git commit -m "Update dr-charm to $version"
+          git push origin HEAD:main
