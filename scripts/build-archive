@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  printf 'usage: VERSION GOARCH\n' >&2
+  exit 2
+fi
+
+version="$1"
+arch="$2"
+case "$arch" in
+  amd64 | arm64) ;;
+  *)
+    printf 'unsupported Darwin architecture: %s\n' "$arch" >&2
+    exit 1
+    ;;
+esac
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+test "$("$root_dir/scripts/release-version" "v$version")" = "$version"
+dist_dir="${DIST_DIR:-$root_dir/dist}"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/dr-charm-archive.XXXXXX")"
+trap 'rm -rf -- "$work_dir"' EXIT
+
+mkdir -p "$dist_dir" "$work_dir/dr-charm_${version}_darwin_${arch}"
+binary="$work_dir/dr-charm_${version}_darwin_${arch}/dr-charm"
+
+(
+  cd "$root_dir"
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build \
+    -buildvcs=false -trimpath \
+    -ldflags "-s -w -X main.version=$version" \
+    -o "$binary" ./cmd/dr-charm
+)
+install -m 0644 "$root_dir/LICENSE" "$work_dir/dr-charm_${version}_darwin_${arch}/LICENSE"
+install -m 0644 "$root_dir/README.md" "$work_dir/dr-charm_${version}_darwin_${arch}/README.md"
+
+archive="$dist_dir/dr-charm_${version}_darwin_${arch}.tar.gz"
+tar -C "$work_dir" -czf "$archive" "dr-charm_${version}_darwin_${arch}"
+printf '%s\n' "$archive"

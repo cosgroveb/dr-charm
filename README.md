@@ -38,6 +38,41 @@ Use another configuration file with `-config`:
 Credential flags are not supported. This keeps passwords out of shell history
 and process listings.
 
+Print the installed version without reading configuration or opening a game
+connection:
+
+```sh
+dr-charm -version
+```
+
+## Install a release
+
+Homebrew installs the prebuilt macOS binary from the personal tap:
+
+```sh
+brew install cosgroveb/tap/dr-charm
+```
+
+GitHub Releases publish native packages for Debian Trixie and Ubuntu Noble on
+`amd64` and `arm64`. Download the package and its release checksum manifest,
+verify the manifest, then install the package for the local suite and
+architecture:
+
+```sh
+gh release download vX.Y.Z --repo cosgroveb/dr-charm --dir dr-charm-X.Y.Z
+(cd dr-charm-X.Y.Z && sha256sum -c SHA256SUMS)
+sudo apt install ./dr-charm-X.Y.Z/dr-charm_X.Y.Z-1.noble_arm64.deb
+```
+
+Replace the tag and package filename with the selected release, suite, and
+architecture. Releases contain no account configuration or credentials.
+
+Maintainers publish a release by pushing a `vMAJOR.MINOR.PATCH` tag. The release
+workflow builds and verifies all six binaries, publishes the checksummed GitHub
+Release assets, then updates `cosgroveb/homebrew-tap`. Configure
+`HOMEBREW_TAP_TOKEN` as a fine-grained Actions secret with only
+`cosgroveb/homebrew-tap` contents-write access before pushing the first tag.
+
 ## Configuration
 
 All three fields are required:
@@ -127,6 +162,12 @@ gofmt -l .
 go vet ./...
 go test -race -shuffle=on ./...
 go build -o /tmp/dr-charm ./cmd/dr-charm
+```
+
+Release-only archive checks run separately and do not require a game account:
+
+```sh
+make test-release
 ```
 
 The protocol integration test uses loopback TCP servers and runs with the normal

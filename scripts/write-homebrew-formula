@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 4 ]; then
+  printf 'usage: %s OUTPUT VERSION ARM64_SHA256 AMD64_SHA256\n' "$0" >&2
+  exit 2
+fi
+
+output="$1"
+version="$2"
+arm64_sha256="$3"
+amd64_sha256="$4"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  printf 'release version must be MAJOR.MINOR.PATCH: %s\n' "$version" >&2
+  exit 1
+fi
+for checksum in "$arm64_sha256" "$amd64_sha256"; do
+  if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+    printf 'invalid SHA-256 checksum\n' >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$(dirname "$output")"
+cat >"$output" <<EOF
+class DrCharm < Formula
+  desc "DragonRealms terminal client"
+  homepage "https://github.com/cosgroveb/dr-charm"
+  license "Apache-2.0"
+  version "$version"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/cosgroveb/dr-charm/releases/download/v#{version}/dr-charm_#{version}_darwin_arm64.tar.gz"
+      sha256 "$arm64_sha256"
+    end
+
+    on_intel do
+      url "https://github.com/cosgroveb/dr-charm/releases/download/v#{version}/dr-charm_#{version}_darwin_amd64.tar.gz"
+      sha256 "$amd64_sha256"
+    end
+  end
+
+  def install
+    bin.install "dr-charm"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/dr-charm -version")
+  end
+end
+EOF

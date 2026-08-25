@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "dr-charm: %v\n", err)
@@ -23,8 +26,13 @@ func main() {
 }
 
 func run(args []string) error {
+	return runWithOutput(args, os.Stdout)
+}
+
+func runWithOutput(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("dr-charm", flag.ContinueOnError)
 	configPath := flags.String("config", "", "path to DragonRealms configuration file")
+	showVersion := flags.Bool("version", false, "print version and exit")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -33,6 +41,10 @@ func run(args []string) error {
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if *showVersion {
+		_, err := fmt.Fprintf(stdout, "dr-charm %s\n", version)
+		return err
 	}
 
 	cfg, err := config.Load(*configPath)

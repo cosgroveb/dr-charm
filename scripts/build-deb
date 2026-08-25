@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+  printf 'usage: VERSION SUITE\n' >&2
+  exit 2
+fi
+
+version="$1"
+suite="$2"
+case "$suite" in
+  trixie | noble) ;;
+  *)
+    printf 'unsupported Debian or Ubuntu suite: %s\n' "$suite" >&2
+    exit 1
+    ;;
+esac
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+test "$("$root_dir/scripts/release-version" "v$version")" = "$version"
+dist_dir="${DIST_DIR:-$root_dir/dist}"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/dr-charm-deb.XXXXXX")"
+trap 'rm -rf -- "$work_dir"' EXIT
+
+arch="$(dpkg --print-architecture)"
+case "$arch" in
+  amd64 | arm64) ;;
+  *)
+    printf 'unsupported Debian architecture: %s\n' "$arch" >&2
+    exit 1
+    ;;
+esac
+
+package_root="$work_dir/package"
+package_version="${version}-1~${suite}"
+package_path="$dist_dir/dr-charm_${version}-1.${suite}_${arch}.deb"
+mkdir -p "$dist_dir" "$package_root/DEBIAN" \
+  "$package_root/usr/bin" "$package_root/usr/share/doc/dr-charm"
+
+(
+  cd "$root_dir"
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+    -buildvcs=false -trimpath \
+    -ldflags "-s -w -X main.version=$version" \
+    -o "$package_root/usr/bin/dr-charm" ./cmd/dr-charm
+)
+install -m 0644 "$root_dir/README.md" "$package_root/usr/share/doc/dr-charm/README.md"
+install -m 0644 "$root_dir/LICENSE" "$package_root/usr/share/doc/dr-charm/copyright"
+printf '%s (%s) %s; urgency=medium\n\n  * Release %s.\n\n -- Brian Cosgrove <cosgroveb@gmail.com>  %s\n' \
+  'dr-charm' "$package_version" "$suite" "$version" "$(date -R)" \
+  >"$package_root/usr/share/doc/dr-charm/changelog.Debian"
+gzip -9n "$package_root/usr/share/doc/dr-charm/changelog.Debian"
+cat >"$package_root/DEBIAN/control" <<EOF
+Package: dr-charm
+Version: $package_version
+Section: games
+Priority: optional
+Architecture: $arch
+Maintainer: Brian Cosgrove <cosgroveb@gmail.com>
+Depends: ca-certificates
+Homepage: https://github.com/cosgroveb/dr-charm
+Description: DragonRealms terminal client
+ Personal terminal client for DragonRealms.
+EOF
+
+find "$package_root" -type d -exec chmod 0755 {} +
+find "$package_root" -type f -exec chmod 0644 {} +
+chmod 0755 "$package_root/usr/bin/dr-charm"
+(
+  cd "$package_root"
+  find usr -type f -exec md5sum {} \; | sort -k 2 >DEBIAN/md5sums
+)
+dpkg-deb --build --root-owner-group "$package_root" "$package_path" >&2
+"$root_dir/scripts/verify-deb" "$package_path" "$version" "$suite" "$arch"
+printf '%s\n' "$package_path"
