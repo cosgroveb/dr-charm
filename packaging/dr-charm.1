@@ -1,0 +1,27 @@
+.TH DR-CHARM 1 "2026-08-26" "dr-charm 0.0.1" "User Commands"
+.SH NAME
+dr-charm \- DragonRealms terminal client
+.SH SYNOPSIS
+.B dr-charm
+.RB [ -config " " \fIPATH\fR ]
+.br
+.B dr-charm
+.B -version
+.SH DESCRIPTION
+.B dr-charm
+authenticates to DragonRealms and renders a terminal interface.
+.SH OPTIONS
+.TP
+.BI -config " PATH"
+Read credentials from PATH instead of the default configuration locations.
+.TP
+.B -version
+Print the installed version without reading configuration or opening a network
+connection.
+.SH FILES
+.TP
+.I ~/.config/dr-charm/config.yaml
+Preferred configuration file containing account credentials.
+.SH SECURITY
+Configuration files contain account credentials and should be readable only by
+their owner.

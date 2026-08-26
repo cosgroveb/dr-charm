@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: dr-charm
+Source: https://github.com/cosgroveb/dr-charm
+
+Files: *
+Copyright: 2025-2026 Brian Cosgrove <cosgroveb@gmail.com>
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0.
+ .
+ On Debian systems, the complete text of the Apache License, Version 2.0 can
+ be found in /usr/share/common-licenses/Apache-2.0.

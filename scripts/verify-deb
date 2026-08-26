@@ -44,7 +44,13 @@ usr/share/doc
 usr/share/doc/dr-charm
 usr/share/doc/dr-charm/README.md
 usr/share/doc/dr-charm/changelog.Debian.gz
-usr/share/doc/dr-charm/copyright'
+usr/share/doc/dr-charm/copyright
+usr/share/lintian
+usr/share/lintian/overrides
+usr/share/lintian/overrides/dr-charm
+usr/share/man
+usr/share/man/man1
+usr/share/man/man1/dr-charm.1.gz'
 actual_paths="$(cd "$work_dir/root" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort)"
 if [ "$actual_paths" != "$expected_paths" ]; then
   printf 'unexpected package paths:\n%s\n' "$actual_paths" >&2
