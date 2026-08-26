@@ -35,7 +35,9 @@ package_root="$work_dir/package"
 package_version="${version}-1~${suite}"
 package_path="$dist_dir/dr-charm_${version}-1.${suite}_${arch}.deb"
 mkdir -p "$dist_dir" "$package_root/DEBIAN" \
-  "$package_root/usr/bin" "$package_root/usr/share/doc/dr-charm"
+  "$package_root/usr/bin" "$package_root/usr/share/doc/dr-charm" \
+  "$package_root/usr/share/lintian/overrides" \
+  "$package_root/usr/share/man/man1"
 
 (
   cd "$root_dir"
@@ -45,22 +47,29 @@ mkdir -p "$dist_dir" "$package_root/DEBIAN" \
     -o "$package_root/usr/bin/dr-charm" ./cmd/dr-charm
 )
 install -m 0644 "$root_dir/README.md" "$package_root/usr/share/doc/dr-charm/README.md"
-install -m 0644 "$root_dir/LICENSE" "$package_root/usr/share/doc/dr-charm/copyright"
+install -m 0644 "$root_dir/packaging/copyright" "$package_root/usr/share/doc/dr-charm/copyright"
+install -m 0644 "$root_dir/packaging/dr-charm.lintian-overrides" \
+  "$package_root/usr/share/lintian/overrides/dr-charm"
+install -m 0644 "$root_dir/packaging/dr-charm.1" \
+  "$package_root/usr/share/man/man1/dr-charm.1"
 printf '%s (%s) %s; urgency=medium\n\n  * Release %s.\n\n -- Brian Cosgrove <cosgroveb@gmail.com>  %s\n' \
   'dr-charm' "$package_version" "$suite" "$version" "$(date -R)" \
   >"$package_root/usr/share/doc/dr-charm/changelog.Debian"
 gzip -9n "$package_root/usr/share/doc/dr-charm/changelog.Debian"
+gzip -9n "$package_root/usr/share/man/man1/dr-charm.1"
 cat >"$package_root/DEBIAN/control" <<EOF
 Package: dr-charm
 Version: $package_version
-Section: games
+Section: net
 Priority: optional
 Architecture: $arch
 Maintainer: Brian Cosgrove <cosgroveb@gmail.com>
 Depends: ca-certificates
 Homepage: https://github.com/cosgroveb/dr-charm
 Description: DragonRealms terminal client
- Personal terminal client for DragonRealms.
+ dr-charm is a personal terminal client for DragonRealms. It authenticates
+ through the Simutronics Game Entry service, decodes the StormFront XML stream,
+ and renders a terminal interface.
 EOF
 
 find "$package_root" -type d -exec chmod 0755 {} +
