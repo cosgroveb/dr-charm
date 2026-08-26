@@ -27,16 +27,15 @@ class DrCharm < Formula
   desc "DragonRealms terminal client"
   homepage "https://github.com/cosgroveb/dr-charm"
   license "Apache-2.0"
-  version "$version"
 
   on_macos do
     on_arm do
-      url "https://github.com/cosgroveb/dr-charm/releases/download/v#{version}/dr-charm_#{version}_darwin_arm64.tar.gz"
+      url "https://github.com/cosgroveb/dr-charm/releases/download/v$version/dr-charm_${version}_darwin_arm64.tar.gz"
       sha256 "$arm64_sha256"
     end
 
     on_intel do
-      url "https://github.com/cosgroveb/dr-charm/releases/download/v#{version}/dr-charm_#{version}_darwin_amd64.tar.gz"
+      url "https://github.com/cosgroveb/dr-charm/releases/download/v$version/dr-charm_${version}_darwin_amd64.tar.gz"
       sha256 "$amd64_sha256"
     end
   end
