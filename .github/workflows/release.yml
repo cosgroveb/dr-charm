@@ -61,7 +61,7 @@ jobs:
           version="$(scripts/release-version "$GITHUB_REF_NAME")"
           package="$(scripts/build-deb "$version" "${{ matrix.suite.name }}")"
           lintian -iIEcv --pedantic "$package"
-          apt-get install -y "./$package"
+          apt-get install -y "$package"
           test "$(dr-charm -version)" = "dr-charm $version"
       - uses: actions/upload-artifact@v4
         with:
