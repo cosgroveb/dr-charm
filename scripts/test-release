@@ -27,5 +27,6 @@ formula="$work_dir/Formula/dr-charm.rb"
 ruby -c "$formula" >/dev/null
 grep -F "releases/download/v$version/dr-charm_${version}_darwin_arm64.tar.gz" "$formula" >/dev/null
 grep -F "releases/download/v$version/dr-charm_${version}_darwin_amd64.tar.gz" "$formula" >/dev/null
+grep -F "version \"$version\"" "$formula" >/dev/null
 grep -F "$arm64_sha256" "$formula" >/dev/null
 grep -F "$amd64_sha256" "$formula" >/dev/null

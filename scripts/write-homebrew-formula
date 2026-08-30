@@ -27,6 +27,7 @@ class DrCharm < Formula
   desc "DragonRealms terminal client"
   homepage "https://github.com/cosgroveb/dr-charm"
   license "Apache-2.0"
+  version "$version"
 
   on_macos do
     on_arm do
