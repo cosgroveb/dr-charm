@@ -11,38 +11,42 @@ development and is built from source.
 
 Requirements:
 
-- Go 1.24.1 or a Go installation that honors the module toolchain directive
+- Go 1.25 or a Go installation that honors the Go 1.26.3 module toolchain directive
 - A DragonRealms account and character
 
-Create a private configuration file:
-
-```sh
-mkdir -p ~/.config/dr-charm
-cp config.example.yaml ~/.config/dr-charm/config.yaml
-chmod 600 ~/.config/dr-charm/config.yaml
-```
-
-Replace the placeholders in that file, then build and run:
+Build and run once. The first run creates an owner-only XDG configuration
+template and exits.
 
 ```sh
 make build
 ./dr-charm
 ```
 
-Use another configuration file with `-config`:
+Edit the file named in the error, fill in all three fields, then run again:
 
 ```sh
-./dr-charm -config /path/to/config.yaml
+${EDITOR:-vi} "${XDG_CONFIG_HOME:-$HOME/.config}/dr-charm/config.yaml"
+./dr-charm
+```
+
+Use another configuration file with `--config` (or `-c`):
+
+```sh
+./dr-charm --config /path/to/config.yaml
 ```
 
 Credential flags are not supported. This keeps passwords out of shell history
 and process listings.
 
+`--no-log` disables the session transcript for one run. Logging is enabled by
+default. `--version` prints the installed version without reading configuration
+or opening a game connection.
+
 Print the installed version without reading configuration or opening a game
 connection:
 
 ```sh
-dr-charm -version
+dr-charm --version
 ```
 
 ## Install a release
@@ -83,13 +87,16 @@ password: your_password
 character: your_character_name
 ```
 
-Configuration precedence is:
+Configuration selection is:
 
-1. The path passed to `-config`, when present.
-2. Otherwise, the first existing file among `.dr-charm.yaml`,
-   `~/.dr-charm/config.yaml`, and `~/.config/dr-charm/config.yaml`.
-3. Nonempty `DR_ACCOUNT`, `DR_PASSWORD`, and `DR_CHARACTER` values override
-   file values.
+1. The path passed to `--config`, when present. `~/` is expanded for this path.
+2. Otherwise, `$XDG_CONFIG_HOME/dr-charm/config.yaml`, or
+   `~/.config/dr-charm/config.yaml` when `XDG_CONFIG_HOME` is unset.
+
+The default file is created as a 0600 commented template in a 0700 directory.
+Existing configuration file and directory modes are accepted. Invalid or
+unreadable files stop startup. `DR_ACCOUNT`, `DR_PASSWORD`, and
+`DR_CHARACTER` are not production configuration inputs.
 
 An explicit file error stops startup. An unreadable or invalid default file
 also stops startup instead of falling through to a later file.
@@ -104,18 +111,29 @@ Keys:
 
 - `Enter`: send command
 - `Up` and `Down`: command history
-- `Page Up`, `Page Down`, `Home`, and `End`: scroll output
-- `Tab`: cycle panes
+- `Page Up`, `Page Down`, `Home`, and `End`: scroll the active pane
+- `Mouse wheel`: scroll the active pane
+- `Tab` and `Shift+Tab`: cycle panes
+- `Ctrl+G`: open the configured command editor
 - `F1`: help
 - `F2`: switch between multi-pane and single-pane views
 - `F3`: choose a theme
 - `F4`: toggle session logging
 - `Ctrl+C`: quit
 
-Logs are written under `~/.dr-charm/logs/`. They contain game output and player
-commands, so protect them like other account data.
+The connection and logging state are shown in the status bar. A disconnect is
+shown in the interface while the session closes or reconnects. Output remains
+available to scroll while the connection state changes.
 
-Custom themes are JSON files under `~/.dr-charm/themes/`. Each file contains
+Logs are written under `$XDG_STATE_HOME/dr-charm/logs/` (or
+`~/.local/state/dr-charm/logs`). They contain game output and player commands,
+so protect them like other account data. Logging is enabled by default and can
+be disabled with `--no-log` or toggled with `F4`. New log directories are 0700
+and log files are 0600. Closed matching files are retained up to 30 files and
+100 MiB as a soft limit.
+
+Custom themes are JSON files under `$XDG_CONFIG_HOME/dr-charm/themes/` (or
+`~/.config/dr-charm/themes`). Each file contains
 one flat object:
 
 ```json
@@ -134,8 +152,8 @@ one flat object:
 Set `name` to a nonempty string. The loader trims surrounding whitespace. The
 other keys are optional. `border_type` accepts `normal`, `hidden`, `thick`,
 `double`, or `rounded`. An empty or unknown `border_type` uses the rounded
-border. The loader ignores files with unknown keys, nested legacy objects, or
-additional JSON values.
+border. Files with unknown keys, nested legacy objects, or additional JSON
+values are reported as theme warnings and skipped.
 
 The loader places custom themes after `default`, `dark`, and `high-contrast` in
 lexical filename order. When two files use the same theme name, the value from
@@ -147,8 +165,9 @@ file can replace a built-in theme without moving its position.
 `internal/dragonrealms.Session` owns authentication, the game connection,
 command serialization, reconnect behavior, XML decoding, and canonical game
 state. It publishes detached `Update` values containing a semantic `Snapshot`
-and display events. The UI consumes those values and sends player commands
-through `Session.Send`; it does not read sockets or parse XML.
+and display events. `internal/dragonrealms/presenter` translates those updates
+into `internal/presentation` values for the UI; the UI does not read sockets or
+parse XML.
 
 `cmd/dr-charm` only loads configuration, creates the session and UI, and runs
 Bubble Tea. Aliases, highlighting, themes, and logging remain UI concerns.

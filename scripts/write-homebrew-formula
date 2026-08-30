@@ -45,7 +45,7 @@ class DrCharm < Formula
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/dr-charm -version")
+    assert_match version.to_s, shell_output("#{bin}/dr-charm --version")
   end
 end
 EOF

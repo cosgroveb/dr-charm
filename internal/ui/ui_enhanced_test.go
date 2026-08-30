@@ -5,318 +5,522 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+	"time"
 
-	"dr-charm/internal/dragonrealms"
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"dr-charm/internal/presentation"
+	"dr-charm/internal/telemetry"
 )
 
-func TestEnhancedModelConsumesConsecutiveSessionUpdates(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	updates := make(chan dragonrealms.Update, 2)
-	updates <- dragonrealms.Update{Snapshot: dragonrealms.Snapshot{Character: "Hero", Connection: dragonrealms.ConnectionReady, Room: dragonrealms.Room{Title: "[First]"}}, Display: []dragonrealms.DisplayEvent{{Kind: dragonrealms.DisplayText, Stream: "main", Text: "first"}}}
-	updates <- dragonrealms.Update{Snapshot: dragonrealms.Snapshot{Character: "Hero", Connection: dragonrealms.ConnectionReady, Room: dragonrealms.Room{Title: "[Second]"}, Prompt: ">"}, Display: []dragonrealms.DisplayEvent{{Kind: dragonrealms.DisplayText, Stream: "main", Text: "second"}}}
-	close(updates)
-	session := &fakeSession{updates: updates}
-	model := InitialEnhancedModel(session, "Hero")
+func TestEnhancedModelConsumesPresentationUpdatesAndKeepsClosedSourceVisible(t *testing.T) {
+	session := &fakeSession{updates: make(chan presentation.Update, 2)}
+	session.updates <- presentation.Update{
+		Connection: presentation.Ready,
+		Title:      "[First]",
+		Prompt:     ">",
+		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "first", Operation: presentation.Append}},
+	}
+	session.updates <- presentation.Update{
+		Connection: presentation.Ready,
+		Title:      "[Second]",
+		Prompt:     ">",
+		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "second", Operation: presentation.Append}},
+	}
+	close(session.updates)
 
-	cmd := model.Init()
-	for i := 0; i < 2; i++ {
+	model := newTestModel(t, session, false)
+	cmd := waitForSessionUpdate(session)
+	for range 2 {
 		msg := cmd()
 		updated, next := model.Update(msg)
 		model = updated.(EnhancedModel)
 		cmd = next
 	}
-	if model.snapshot.Room.Title != "[Second]" || model.snapshot.Prompt != ">" || !strings.Contains(model.View(), "second") {
-		t.Fatalf("model did not apply consecutive updates: %#v\n%s", model.snapshot, model.View())
+	if model.snapshot.Title != "[Second]" || !strings.Contains(model.View().Content, "second") {
+		t.Fatalf("model did not apply updates: %#v\n%s", model.snapshot, model.View().Content)
 	}
-	msg := cmd()
-	updated, next := model.Update(msg)
+	updated, next := model.Update(cmd())
 	model = updated.(EnhancedModel)
-	if next == nil || !model.quitting {
-		t.Fatalf("closed update stream rearmed: next=%v quitting=%v", next, model.quitting)
+	if next != nil || !model.sourceDone || model.quitting {
+		t.Fatalf("closed source state: next=%v sourceDone=%v quitting=%v", next, model.sourceDone, model.quitting)
 	}
-	if _, ok := next().(tea.QuitMsg); !ok {
-		t.Fatalf("closed update stream command returned %T, want tea.QuitMsg", next())
+	view := model.View().Content
+	if !strings.Contains(view, "DISCONNECTED") || !strings.Contains(view, "[system 01:02:03] disconnected") {
+		t.Fatalf("closed source not visible: %q", view)
 	}
 }
 
-func TestEnhancedModelUsesSnapshotWithoutParsingDisplay(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	session := &fakeSession{updates: make(chan dragonrealms.Update)}
-	model := InitialEnhancedModel(session, "Hero")
-	update := dragonrealms.Update{
-		Snapshot: dragonrealms.Snapshot{Room: dragonrealms.Room{Title: "[Canonical]", Description: "Canonical description"}},
-		Display:  []dragonrealms.DisplayEvent{{Kind: dragonrealms.DisplayText, Stream: "main", Text: "[Misleading Display Room]"}},
-	}
-	updated, _ := model.Update(update)
-	model = updated.(EnhancedModel)
-	if model.snapshot.Room.Title != "[Canonical]" || !strings.Contains(model.View(), "Canonical description") {
-		t.Fatalf("model reparsed display instead of using snapshot: %#v", model.snapshot)
-	}
-}
+func TestEnhancedModelSendsOriginalCommandAndLogsAfterSuccess(t *testing.T) {
+	logDir := t.TempDir()
+	session := &fakeSession{updates: make(chan presentation.Update)}
+	model := newTestModelWithLogDir(t, session, logDir, true)
+	model.Init()
+	model.input.SetValue(" l at target ")
 
-func TestEnhancedModelSendsThroughSession(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	session := &fakeSession{updates: make(chan dragonrealms.Update)}
-	model := InitialEnhancedModel(session, "Hero")
-	if err := model.logger.Start(model.character); err != nil {
+	updated, _ := model.Update(key(tea.KeyEnter))
+	model = updated.(EnhancedModel)
+	if got := session.sent; len(got) != 1 || got[0] != "look at target" {
+		t.Fatalf("sent=%#v", got)
+	}
+	if !strings.Contains(strings.Join(model.mainOutput, "\n"), ">  l at target ") {
+		t.Fatalf("command echo missing: %#v", model.mainOutput)
+	}
+	if err := model.logger.Stop(); err != nil {
 		t.Fatal(err)
 	}
-	model.input = "l"
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(EnhancedModel)
-	model.logger.Stop()
-	if len(session.sent) != 1 || session.sent[0] != "look" {
-		t.Fatalf("sent = %#v", session.sent)
-	}
-	history := strings.Join(model.mainOutput, "\n")
-	if !strings.Contains(history, "> l") || strings.Contains(history, "> look") {
-		t.Fatalf("command history = %q", history)
-	}
-	logDir := filepath.Join(home, ".dr-charm", "logs")
 	entries, err := os.ReadDir(logDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 {
-		t.Fatalf("log entries = %d", len(entries))
+		t.Fatalf("log entries=%d", len(entries))
 	}
-	logData, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	data, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if logText := string(logData); !strings.Contains(logText, "> l") || strings.Contains(logText, "> look") {
-		t.Fatalf("command log = %q", logText)
+	if text := string(data); !strings.Contains(text, ">  l at target ") {
+		t.Fatalf("command log=%q", text)
 	}
+
 	session.err = errors.New("send failed")
-	model.input = "north"
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model.input.SetValue("north")
+	updated, _ = model.Update(key(tea.KeyEnter))
 	model = updated.(EnhancedModel)
-	if model.err == nil {
-		t.Fatal("send error was not displayed")
+	if got := session.sent; len(got) != 2 {
+		t.Fatalf("send error did not call session: %#v", got)
+	}
+	if strings.Contains(strings.Join(model.mainOutput, "\n"), "> north") {
+		t.Fatalf("failed command was echoed: %#v", model.mainOutput)
 	}
 }
 
-func TestEnhancedModelOwnsFamiliarHistory(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	session := &fakeSession{updates: make(chan dragonrealms.Update)}
-	model := InitialEnhancedModel(session, "Hero")
-	updated, _ := model.Update(dragonrealms.Update{Display: []dragonrealms.DisplayEvent{{Kind: dragonrealms.DisplayText, Stream: "familiar", Text: "A raven speaks."}}})
+func TestEnhancedModelOwnsAliasesAndHighlights(t *testing.T) {
+	useANSI256(t)
+	session := &fakeSession{updates: make(chan presentation.Update)}
+	model := newTestModel(t, session, false)
+	model.input.SetValue("n")
+
+	updated, _ := model.Update(key(tea.KeyEnter))
 	model = updated.(EnhancedModel)
-	if got := model.familiarOutput; len(got) != 1 || got[0] != "A raven speaks." {
-		t.Fatalf("familiar content = %#v", got)
+	if got := session.sent; len(got) != 1 || got[0] != "north" {
+		t.Fatalf("sent=%#v", got)
 	}
-	updated, _ = model.Update(dragonrealms.Update{Display: []dragonrealms.DisplayEvent{{Kind: dragonrealms.DisplayClear, Stream: "familiar"}}})
-	model = updated.(EnhancedModel)
-	if got := model.familiarOutput; len(got) != 0 {
-		t.Fatalf("familiar clear left %#v", got)
-	}
-}
 
-func TestEnhancedModelProjectsSnapshotIntoRoomAndHands(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	snapshot := dragonrealms.Snapshot{
-		Room: dragonrealms.Room{
-			Title: "[Square]", Description: "A broad square.", Exits: []string{"north", "", "east"},
-			Objects: []string{"a bench"}, Players: []string{"Cennedig"}, Creatures: []string{"a rat"},
-		},
-		Hands: dragonrealms.Hands{Right: "a sword", Left: "a shield"}, PreparedSpell: "Fire Ball",
-	}
-	model.applySessionUpdate(dragonrealms.Update{Snapshot: snapshot})
-
-	wantRoom := []string{"[Square]", "", "A broad square.", "", "Exits: north, east", "", "You also see:", "  a bench", "", "Also here:", "  Cennedig", "", "Creatures:", "  a rat"}
-	if got := roomContent(model.snapshot); !reflect.DeepEqual(got, wantRoom) {
-		t.Fatalf("room content = %#v, want %#v", got, wantRoom)
-	}
-	wantHands := []string{"Right: a sword", "Left: a shield", "", "Spell: Fire Ball"}
-	if got := handsContent(model.snapshot); !reflect.DeepEqual(got, wantHands) {
-		t.Fatalf("hands content = %#v, want %#v", got, wantHands)
-	}
-}
-
-func TestEnhancedModelRoutesHistoriesDiagnosticsCommandsAndClears(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	session := &fakeSession{updates: make(chan dragonrealms.Update)}
-	model := InitialEnhancedModel(session, "Hero")
-	model.applySessionUpdate(dragonrealms.Update{
-		Display: []dragonrealms.DisplayEvent{
-			{Kind: dragonrealms.DisplayText, Stream: "main", Text: "main line"},
-			{Kind: dragonrealms.DisplayText, Stream: "familiar", Text: "familiar line"},
-			{Kind: dragonrealms.DisplayText, Stream: "main", Text: "duplicate", DuplicateEcho: true},
-		},
-		Diagnostics: []dragonrealms.Diagnostic{{Text: "parser warning"}},
+	model.applySessionUpdate(presentation.Update{
+		Connection: presentation.Ready,
+		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "Goblin just arrived.", Operation: presentation.Append}},
 	})
-	if got := model.mainOutput; !reflect.DeepEqual(got, []string{"Connected to DragonRealms", "main line", "[protocol] parser warning"}) {
-		t.Fatalf("main history = %#v", got)
-	}
-	if got := model.familiarOutput; !reflect.DeepEqual(got, []string{"familiar line"}) {
-		t.Fatalf("familiar history = %#v", got)
-	}
-	model.input = "look"
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(EnhancedModel)
-	if got := model.mainOutput[len(model.mainOutput)-1]; got != "> look" {
-		t.Fatalf("command echo = %q", got)
-	}
-	model.activePane = "familiar"
-	model.applySessionUpdate(dragonrealms.Update{Display: []dragonrealms.DisplayEvent{
-		{Kind: dragonrealms.DisplayClear, Stream: "main"},
-		{Kind: dragonrealms.DisplayClear, Stream: "familiar"},
-	}})
-	if len(model.mainOutput) != 0 || len(model.familiarOutput) != 0 || model.activePane != "main" {
-		t.Fatalf("clear left histories/focus: main=%#v familiar=%#v active=%q", model.mainOutput, model.familiarOutput, model.activePane)
+	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "\x1b[") {
+		t.Fatalf("highlight not applied: %q", output)
 	}
 }
 
-func TestEnhancedModelHistoryCapsVisibilityAndFocusCycling(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	for index := range 501 {
-		model.addOutput(fmt.Sprintf("main-%03d", index))
+func TestEnhancedModelReportsTranscriptWriteFailure(t *testing.T) {
+	logger := &fakeLogger{enabled: true, writeErr: errors.New("disk full"), stopErr: errors.New("sync failed")}
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.logger = logger
+	model.logState = logOn
+
+	model.applySessionUpdate(presentation.Update{
+		Connection: presentation.Ready,
+		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "line", Operation: presentation.Append}},
+	})
+	if model.logState != logFailed || logger.stopCalls != 1 {
+		t.Fatalf("log state=%v stopCalls=%d", model.logState, logger.stopCalls)
 	}
-	familiar := make([]dragonrealms.DisplayEvent, 101)
-	for index := range familiar {
-		familiar[index] = dragonrealms.DisplayEvent{Kind: dragonrealms.DisplayText, Stream: "familiar", Text: fmt.Sprintf("familiar-%03d", index)}
-	}
-	model.applySessionUpdate(dragonrealms.Update{Display: familiar})
-	if len(model.mainOutput) != 500 || model.mainOutput[0] != "main-001" {
-		t.Fatalf("main cap = len %d first %q", len(model.mainOutput), model.mainOutput[0])
-	}
-	if got := model.familiarOutput; len(got) != 100 || got[0] != "familiar-001" {
-		t.Fatalf("familiar cap = len %d first %q", len(got), got[0])
-	}
-	if !strings.Contains(model.View(), "Familiar") {
-		t.Fatal("available familiar pane was not rendered")
-	}
-	for _, want := range []string{"room", "hands", "familiar", "main"} {
-		updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
-		model = updated.(EnhancedModel)
-		if got := model.activePane; got != want {
-			t.Fatalf("active pane = %q, want %q", got, want)
-		}
+	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "logging failed: disk full (close failed: sync failed)") {
+		t.Fatalf("missing logging failure: %q", output)
 	}
 }
 
-func TestEnhancedModelRepeatedResizeAndRender(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	for _, size := range []tea.WindowSizeMsg{{Width: 120, Height: 40}, {Width: 20, Height: 5}, {Width: 80, Height: 24}} {
-		updated, _ := model.Update(size)
-		model = updated.(EnhancedModel)
-		if got := model.View(); got == "" {
-			t.Fatalf("empty render at %#v", size)
-		}
-	}
-}
-
-func TestEnhancedModelSnapshotReplacementDropsPriorProjection(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	first := completeLayoutSnapshot()
-	second := dragonrealms.Snapshot{Connection: dragonrealms.ConnectionReady, Character: "Hero", Room: dragonrealms.Room{Title: "[Second Room]"}}
-	model.applySessionUpdate(dragonrealms.Update{Snapshot: first})
-	model.applySessionUpdate(dragonrealms.Update{Snapshot: second})
-	if !reflect.DeepEqual(model.snapshot, second) {
-		t.Fatalf("snapshot merged instead of replaced: %#v", model.snapshot)
-	}
-	view := model.View()
-	for _, stale := range []string{"A broad green.", "a bench", "a sword", "Fire Ball"} {
-		if strings.Contains(view, stale) {
-			t.Fatalf("second snapshot render retained %q: %q", stale, view)
-		}
-	}
-	if !strings.Contains(view, "[Second Room]") {
-		t.Fatalf("second snapshot missing from %q", view)
-	}
-}
-
-func TestEnhancedModelPaneCyclesWithAndWithoutFamiliar(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	for _, want := range []string{"room", "hands", "main"} {
-		model.cyclePane()
-		if model.activePane != want {
-			t.Fatalf("no-familiar cycle = %q, want %q", model.activePane, want)
-		}
-	}
-	model.familiarOutput = []string{"", "not visible"}
-	if familiarAvailable(model.familiarOutput) || strings.Contains(model.View(), "Familiar") {
-		t.Fatal("empty first familiar entry was treated as available")
-	}
-	for _, want := range []string{"room", "hands", "main"} {
-		model.cyclePane()
-		if model.activePane != want {
-			t.Fatalf("empty-first familiar cycle = %q, want %q", model.activePane, want)
-		}
-	}
-	model.familiarOutput = []string{"visible"}
-	for _, want := range []string{"room", "hands", "familiar", "main"} {
-		model.cyclePane()
-		if model.activePane != want {
-			t.Fatalf("familiar cycle = %q, want %q", model.activePane, want)
-		}
-	}
-}
-
-func TestEnhancedModelFamiliarCapRolloverRestoresMainFocus(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	model.familiarOutput = make([]string, 100)
-	model.familiarOutput[0] = "visible oldest"
-	model.activePane = "familiar"
-	model.addFamiliarOutput("newest")
-	if len(model.familiarOutput) != 100 || model.familiarOutput[0] != "" || model.activePane != "main" {
-		t.Fatalf("rollover = len %d first %q active %q", len(model.familiarOutput), model.familiarOutput[0], model.activePane)
-	}
-}
-
-func TestEnhancedModelScrollOffsetOnlyAffectsSinglePane(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
+func TestEnhancedModelRoutesPaneUpdatesFocusUnreadAndScroll(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
 	model.width = 80
 	model.height = 20
-	model.mainOutput = nil
-	for index := range 20 {
-		model.mainOutput = append(model.mainOutput, fmt.Sprintf("line-%02d", index))
+	model.resizePanes()
+	lines := make([]string, 0, 30)
+	for i := range 30 {
+		lines = append(lines, "line-"+string(rune('A'+i%26)))
 	}
-	model.scrollOffset = 5
-	model.viewMode = ViewModeSingle
-	single := model.View()
-	if !strings.Contains(single, "line-14") || strings.Contains(single, "line-19") {
-		t.Fatalf("single-pane scroll ignored offset: %q", single)
+	roomLines := make([]string, 0, 20)
+	for i := range 20 {
+		roomLines = append(roomLines, fmt.Sprintf("room-%02d", i))
 	}
-	model.viewMode = ViewModeMulti
-	multi := model.View()
-	if !strings.Contains(multi, "line-19") {
-		t.Fatalf("multi-pane render did not show independent tail: %q", multi)
+	model.applySessionUpdate(presentation.Update{
+		Connection: presentation.Ready,
+		Entries: []presentation.Entry{
+			{Pane: presentation.RoomPane, Text: strings.Join(roomLines, "\n"), Operation: presentation.Replace},
+			{Pane: presentation.HandsPane, Text: "Right: sword\nLeft: shield", Operation: presentation.Replace},
+			{Pane: presentation.Familiar, Text: "familiar", Operation: presentation.Append},
+			{Pane: presentation.Game, Text: strings.Join(lines, "\n"), Operation: presentation.Append},
+		},
+	})
+	if !model.unread[paneFamiliar] {
+		t.Fatal("inactive familiar pane was not marked unread")
+	}
+	updated, _ := model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
+	if model.activePane != paneRoom {
+		t.Fatalf("active pane=%q", model.activePane)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = updated.(EnhancedModel)
+	if model.activePane != paneMain {
+		t.Fatalf("shift-tab active pane=%q", model.activePane)
+	}
+	if containsPane(model.focusablePanes(), paneHands) {
+		t.Fatalf("hands should not be focusable without overflow: %#v", model.focusablePanes())
+	}
+	model.replacePane(paneHands, strings.Split(strings.Repeat("hand\n", model.handsViewport.Height()+2), "\n"))
+	if !containsPane(model.focusablePanes(), paneHands) {
+		t.Fatalf("hands should be focusable when overflowing: %#v", model.focusablePanes())
+	}
+	model.activePane = paneFamiliar
+	model.replacePane(paneFamiliar, nil)
+	if model.activePane != paneMain {
+		t.Fatalf("optional pane disappearance did not restore game focus: %q", model.activePane)
+	}
+	before := model.roomViewport.YOffset()
+	model.activePane = paneRoom
+	updated, _ = model.Update(key(tea.KeyPgUp))
+	model = updated.(EnhancedModel)
+	if model.roomViewport.YOffset() > before {
+		t.Fatalf("room viewport moved the wrong way")
+	}
+	view := model.View()
+	if view.MouseMode != tea.MouseModeCellMotion || view.OnMouse == nil {
+		t.Fatalf("mouse mode = %v handler nil=%v", view.MouseMode, view.OnMouse == nil)
+	}
+	msg := view.OnMouse(tea.MouseWheelMsg{Button: tea.MouseWheelUp})()
+	if _, ok := msg.(tea.MouseWheelMsg); !ok {
+		t.Fatalf("mouse handler returned %T", msg)
 	}
 }
 
-func TestConnectionBannerAppearsInSingleAndMultiPane(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
-	for _, mode := range []ViewMode{ViewModeSingle, ViewModeMulti} {
-		model.viewMode = mode
-		if view := model.View(); !strings.Contains(view, "Connected to DragonRealms") {
-			t.Fatalf("mode %v omitted connection banner", mode)
-		}
+func TestEnhancedModelFocusSkipsNonScrollingRoomAndSinglePaneScrollsGame(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 20
+	model.resizePanes()
+	model.replacePane(paneRoom, []string{"small room"})
+	model.appendPane(paneFamiliar, "familiar")
+	if containsPane(model.focusablePanes(), paneRoom) {
+		t.Fatalf("non-scrolling room should not be focusable: %#v", model.focusablePanes())
 	}
+	updated, _ := model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
+	if model.activePane != paneFamiliar {
+		t.Fatalf("active pane=%q, want familiar", model.activePane)
+	}
+	updated, _ = model.Update(key(tea.KeyF2))
+	model = updated.(EnhancedModel)
+	if model.viewMode != ViewModeSingle || model.activePane != paneMain {
+		t.Fatalf("single mode=%v active=%q", model.viewMode, model.activePane)
+	}
+}
+
+func TestEnhancedModelPageUpDoesNotClearUnread(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 18
+	model.resizePanes()
+	lines := make([]string, 0, 20)
+	for i := range 20 {
+		lines = append(lines, fmt.Sprintf("room-%02d", i))
+	}
+	model.replacePane(paneRoom, lines)
+	model.unread[paneRoom] = true
+	model.activePane = paneRoom
+	model.roomViewport.GotoBottom()
+
+	updated, _ := model.Update(key(tea.KeyPgUp))
+	model = updated.(EnhancedModel)
+	if !model.unread[paneRoom] {
+		t.Fatal("page up cleared unread")
+	}
+	model.roomViewport.GotoBottom()
+	updated, _ = model.Update(key(tea.KeyPgDown))
+	model = updated.(EnhancedModel)
+	if model.unread[paneRoom] {
+		t.Fatal("page down at bottom did not clear unread")
+	}
+}
+
+func TestEnhancedModelResizePreservesScrolledInactivePaneOffset(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 18
+	model.resizePanes()
+	lines := make([]string, 0, 20)
+	for i := range 20 {
+		lines = append(lines, fmt.Sprintf("room-%02d", i))
+	}
+	model.replacePane(paneRoom, lines)
+	model.activePane = paneRoom
+	model.roomViewport.GotoTop()
+	scrolledOffset := model.roomViewport.YOffset()
+	model.activePane = paneMain
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 90, Height: 18})
+	model = updated.(EnhancedModel)
+	if model.roomViewport.YOffset() != scrolledOffset {
+		t.Fatalf("room offset after resize = %d, want %d", model.roomViewport.YOffset(), scrolledOffset)
+	}
+}
+
+func TestEnhancedModelPaneReplacementPreservesScrolledInactiveOffset(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 18
+	model.resizePanes()
+	roomLines := make([]string, 0, 20)
+	for i := range 20 {
+		roomLines = append(roomLines, fmt.Sprintf("room-%02d", i))
+	}
+	model.replacePane(paneRoom, roomLines)
+	model.activePane = paneRoom
+	model.roomViewport.GotoTop()
+	scrolledOffset := model.roomViewport.YOffset()
+	model.activePane = paneMain
+	model.unread[paneRoom] = false
+
+	updatedLines := append([]string(nil), roomLines...)
+	updatedLines[len(updatedLines)-1] = "room-changed"
+	model.replacePane(paneRoom, updatedLines)
+	if model.roomViewport.YOffset() != scrolledOffset {
+		t.Fatalf("room offset = %d, want %d", model.roomViewport.YOffset(), scrolledOffset)
+	}
+	if !model.unread[paneRoom] {
+		t.Fatal("changed inactive pane was not marked unread")
+	}
+	model.unread[paneRoom] = false
+	model.replacePane(paneRoom, updatedLines)
+	if model.unread[paneRoom] {
+		t.Fatal("identical replacement marked unread")
+	}
+}
+
+func TestEnhancedModelAppendPreservesScrolledInactiveFamiliarOffset(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 18
+	model.resizePanes()
+	lines := make([]string, 0, 20)
+	for i := range 20 {
+		lines = append(lines, fmt.Sprintf("familiar-%02d", i))
+	}
+	model.replacePane(paneFamiliar, lines)
+	model.activePane = paneFamiliar
+	model.familiarView.GotoTop()
+	scrolledOffset := model.familiarView.YOffset()
+	model.activePane = paneMain
+	model.unread[paneFamiliar] = false
+
+	model.appendPane(paneFamiliar, "new familiar line")
+	if model.familiarView.YOffset() != scrolledOffset {
+		t.Fatalf("familiar offset = %d, want %d", model.familiarView.YOffset(), scrolledOffset)
+	}
+	if !model.unread[paneFamiliar] {
+		t.Fatal("changed inactive familiar pane was not marked unread")
+	}
+}
+
+func TestEnhancedModelRecordsConnectionTransitionsAsDurableHistory(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready})
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Reconnecting})
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Reconnecting})
+	output := strings.Join(model.mainOutput, "\n")
+	if strings.Count(output, "connection: READY") != 1 || strings.Count(output, "connection: RECONNECTING") != 1 {
+		t.Fatalf("connection history = %q", output)
+	}
+	if !strings.Contains(output, "[system 01:02:03] connection: READY") {
+		t.Fatalf("timestamped connection history missing: %q", output)
+	}
+}
+
+func TestEnhancedModelUsesTextInputHistoryAndEditorResult(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.input.SetValue("look")
+	updated, _ := model.Update(key(tea.KeyEnter))
+	model = updated.(EnhancedModel)
+	model.input.SetValue("north")
+	updated, _ = model.Update(key(tea.KeyEnter))
+	model = updated.(EnhancedModel)
+
+	updated, _ = model.Update(key(tea.KeyUp))
+	model = updated.(EnhancedModel)
+	if got := model.input.Value(); got != "north" {
+		t.Fatalf("history up=%q", got)
+	}
+	model.finishEditor(editorFinishedMsg{path: writeEditorFile(t, "dance\n")})
+	if got := model.input.Value(); got != "dance" {
+		t.Fatalf("editor result=%q", got)
+	}
+	model.finishEditor(editorFinishedMsg{path: writeEditorFile(t, "one\ntwo\n"), draft: "dance"})
+	if got := model.input.Value(); got != "dance" {
+		t.Fatalf("multiline editor did not preserve draft: %q", got)
+	}
+
+	removeEditorFile = func(string) error { return errors.New("remove failed") }
+	t.Cleanup(func() { removeEditorFile = os.Remove })
+	model.finishEditor(editorFinishedMsg{path: writeEditorFile(t, "kick\n"), draft: "dance"})
+	if got := model.input.Value(); got != "dance" {
+		t.Fatalf("remove failure did not preserve draft: %q", got)
+	}
+	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "editor failed: remove failed") {
+		t.Fatalf("remove failure was not reported: %q", output)
+	}
+}
+
+func TestEnhancedModelCleansEditorDraftAfterProcessFailure(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	path := writeEditorFile(t, "changed\n")
+	removed := false
+	removeEditorFile = func(got string) error {
+		if got != path {
+			t.Fatalf("removed %q, want %q", got, path)
+		}
+		removed = true
+		return nil
+	}
+	t.Cleanup(func() { removeEditorFile = os.Remove })
+
+	model.finishEditor(editorFinishedMsg{path: path, draft: "look", err: errors.New("editor exited 1")})
+	if !removed {
+		t.Fatal("editor temp file was not removed after process failure")
+	}
+	if got := model.input.Value(); got != "look" {
+		t.Fatalf("draft = %q, want look", got)
+	}
+	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "editor failed: editor exited 1") {
+		t.Fatalf("process failure not reported: %q", output)
+	}
+}
+
+func TestEnhancedModelCleansEditorDraftAfterReadFailure(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	path := writeEditorFile(t, "changed\n")
+	readEditorFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
+	removed := false
+	removeEditorFile = func(got string) error {
+		removed = true
+		return os.Remove(got)
+	}
+	t.Cleanup(func() {
+		readEditorFile = os.ReadFile
+		removeEditorFile = os.Remove
+	})
+
+	model.finishEditor(editorFinishedMsg{path: path, draft: "look"})
+	if !removed {
+		t.Fatal("editor temp file was not removed after read failure")
+	}
+	if got := model.input.Value(); got != "look" {
+		t.Fatalf("draft = %q, want look", got)
+	}
+	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "editor failed: read failed") {
+		t.Fatalf("read failure not reported: %q", output)
+	}
+}
+
+func TestEnhancedModelLoggingCanStartDisabledAndToggleCurrentSession(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.Init()
+	if model.logger.IsEnabled() || !strings.Contains(model.buildStatusBar(), "LOG off") {
+		t.Fatalf("logging initial state enabled")
+	}
+	updated, _ := model.Update(key(tea.KeyF4))
+	model = updated.(EnhancedModel)
+	if !model.logger.IsEnabled() || !strings.Contains(model.buildStatusBar(), "LOG on") {
+		t.Fatalf("logging did not start")
+	}
+	updated, _ = model.Update(key(tea.KeyF4))
+	model = updated.(EnhancedModel)
+	if model.logger.IsEnabled() || !strings.Contains(model.buildStatusBar(), "LOG off") {
+		t.Fatalf("logging did not stop")
+	}
+}
+
+func newTestModel(t *testing.T, session gameSession, logging bool) EnhancedModel {
+	t.Helper()
+	return newTestModelWithLogDir(t, session, t.TempDir(), logging)
+}
+
+func newTestModelWithLogDir(t *testing.T, session gameSession, logDir string, logging bool) EnhancedModel {
+	t.Helper()
+	model := InitialEnhancedModel(session, Options{
+		Character: "Hero",
+		LogDir:    logDir,
+		ThemeDir:  t.TempDir(),
+		Logging:   logging,
+	})
+	model.now = func() time.Time {
+		return time.Date(2026, time.August, 30, 1, 2, 3, 0, time.Local)
+	}
+	return model
 }
 
 type fakeSession struct {
-	updates chan dragonrealms.Update
+	updates chan presentation.Update
 	sent    []string
 	err     error
 }
+
+type fakeLogger struct {
+	enabled   bool
+	writeErr  error
+	stopErr   error
+	stopCalls int
+}
+
+func (l *fakeLogger) Start(string) (telemetry.StartResult, error) {
+	l.enabled = true
+	return telemetry.StartResult{Path: "/tmp/dr-charm.log"}, nil
+}
+
+func (l *fakeLogger) Stop() error {
+	l.stopCalls++
+	l.enabled = false
+	return l.stopErr
+}
+
+func (l *fakeLogger) Write(string) error { return l.writeErr }
+func (l *fakeLogger) IsEnabled() bool    { return l.enabled }
+func (l *fakeLogger) Path() string       { return "/tmp/dr-charm.log" }
 
 func (s *fakeSession) Send(command string) error {
 	s.sent = append(s.sent, command)
 	return s.err
 }
 
-func (s *fakeSession) Updates() <-chan dragonrealms.Update { return s.updates }
+func (s *fakeSession) Next() (presentation.Update, bool) {
+	update, ok := <-s.updates
+	return update, ok
+}
+
+func key(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: code})
+}
+
+func ctrlKey(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: code, Mod: tea.ModCtrl})
+}
+
+func writeEditorFile(t *testing.T, contents string) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "editor-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(contents); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return file.Name()
+}

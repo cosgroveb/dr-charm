@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 type theme struct {
@@ -26,6 +26,7 @@ type theme struct {
 type themeCatalog struct {
 	themes       []theme
 	currentIndex int
+	warnings     []error
 }
 
 func newThemeCatalog(themesDir string) *themeCatalog {
@@ -45,19 +46,22 @@ func (c *themeCatalog) loadCustomThemes(themesDir string) {
 	if themesDir == "" {
 		return
 	}
-	if err := os.MkdirAll(themesDir, 0o755); err != nil {
-		fmt.Printf("Failed to load themes from %s: %v\n", themesDir, err)
+	entries, err := os.ReadDir(themesDir)
+	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	files, err := filepath.Glob(filepath.Join(themesDir, "*.json"))
 	if err != nil {
-		fmt.Printf("Failed to load themes from %s: %v\n", themesDir, err)
+		c.warnings = append(c.warnings, fmt.Errorf("read themes: %w", err))
 		return
 	}
-	for _, file := range files {
-		loaded, err := loadThemeFromFile(file)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(themesDir, entry.Name())
+		loaded, err := loadThemeFromFile(path)
 		if err != nil {
-			fmt.Printf("Failed to load theme %s: %v\n", file, err)
+			c.warnings = append(c.warnings, fmt.Errorf("%s: %w", path, err))
 			continue
 		}
 		c.add(loaded)

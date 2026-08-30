@@ -1,3 +1,6 @@
-account: your_account_name
-password: your_password
-character: your_character_name
+# DragonRealms account configuration.
+# Fill in all three values, then run dr-charm again.
+
+account:
+password:
+character:

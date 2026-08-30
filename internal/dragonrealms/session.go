@@ -400,6 +400,7 @@ func (s *Session) terminal(reducer *reducer, source error) {
 }
 
 func (s *Session) publish(update Update) bool {
+	sanitizeUpdate(&update)
 	update.Snapshot = cloneSnapshot(update.Snapshot)
 	update.Display = cloneDisplay(update.Display)
 	select {

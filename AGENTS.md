@@ -24,7 +24,8 @@ compatibility layers for the removed prototype, or features for other clients.
 ## Architecture
 
 1. `cmd/dr-charm/main.go` loads configuration, creates one
-   `dragonrealms.Session`, constructs the UI, and runs Bubble Tea.
+   `dragonrealms.Session`, constructs the presentation client and UI, and runs
+   Bubble Tea.
 2. `internal/dragonrealms.Session` owns SGE authentication, the game connection,
    retries, reconnects, command serialization, XML decoding, protocol state,
    update publication, cancellation, and goroutine joins.
@@ -32,9 +33,11 @@ compatibility layers for the removed prototype, or features for other clients.
    The private reducer is the only owner of canonical game state.
 4. Session publishes detached `dragonrealms.Update` values. Public `Snapshot`
    fields are semantic UI state; raw component dictionaries stay private.
-5. `internal/ui.EnhancedModel` consumes updates and calls `Session.Send`. It owns
-   presentation history, aliases, highlighting, themes, and logging. It must not
-   know XML tags, SGE fields, endpoints, socket rules, or retry policy.
+5. `internal/dragonrealms/presenter` translates Session updates into the
+   protocol-neutral `internal/presentation` model. `internal/ui.EnhancedModel`
+   consumes presentation updates and sends commands through that client. The UI
+   owns presentation history, aliases, highlighting, themes, and logging. It
+   must not know XML tags, SGE fields, endpoints, socket rules, or retry policy.
 
 Do not introduce a second socket reader, socket writer, protocol parser, or
 mutable game-state owner. `Snapshot.Connection` is the connection truth exposed
@@ -42,15 +45,30 @@ to consumers.
 
 ## Configuration
 
-`config.Load` applies this order:
+`config.LoadResolved` applies this order:
 
-1. An explicit `-config` path, or the first existing default file.
-2. Nonempty `DR_ACCOUNT`, `DR_PASSWORD`, and `DR_CHARACTER` overrides.
+1. An explicit `--config` path, with `~/` expansion, when supplied.
+2. Otherwise, `$XDG_CONFIG_HOME/dr-charm/config.yaml`, or
+   `~/.config/dr-charm/config.yaml`.
 3. Required-field validation.
 
-Default files are `.dr-charm.yaml`, `~/.dr-charm/config.yaml`, and
-`~/.config/dr-charm/config.yaml`, in that order. Existing unreadable or invalid
-files are errors. Credential command-line flags are intentionally absent.
+The default template is created in a 0700 directory with mode 0600. Existing
+file and directory modes are accepted. Existing unreadable or invalid files are
+errors. Production does not read `DR_ACCOUNT`, `DR_PASSWORD`, or `DR_CHARACTER`.
+The tagged test-only E2E path may use `DR_E2E_CONFIG` or the complete credential
+tuple.
+
+`$XDG_CONFIG_HOME/dr-charm/themes` contains custom themes. Session logs use
+`$XDG_STATE_HOME/dr-charm/logs`, with `~/.config` and `~/.local/state` fallbacks.
+New log directories are 0700 and new log files are 0600.
+
+## Terminal text and presentation
+
+Every terminal-visible string crossing the Session boundary is sanitized.
+Sanitization repairs invalid UTF-8, normalizes line endings, strips terminal
+control sequences, preserves printable Unicode, TAB, and LF, and removes other
+controls. Presentation code may add local styling for the terminal, but raw
+network text and protocol values must not enter public state.
 
 ## Tests
 
@@ -61,8 +79,9 @@ account.
 
 The tagged E2E test is the only live test. Selecting it requires either
 `DR_E2E_CONFIG` or the complete `DR_ACCOUNT`, `DR_PASSWORD`, and `DR_CHARACTER`
-tuple. Missing or placeholder credentials fail setup. The test must not skip,
-substitute a fake, or send commands beyond automatic `look` and `flags`.
+tuple. Missing or placeholder credentials fail setup. This environment access
+is test-only. The test must not skip, substitute a fake, or send commands
+beyond automatic `look` and `flags`.
 
 Use a temporary output path so a review build does not replace the running
 binary:

@@ -62,7 +62,7 @@ jobs:
           package="$(scripts/build-deb "$version" "${{ matrix.suite.name }}")"
           lintian -iIEcv --pedantic "$package"
           apt-get install -y "$package"
-          test "$(dr-charm -version)" = "dr-charm $version"
+          test "$(dr-charm --version)" = "dr-charm $version"
       - uses: actions/upload-artifact@v4
         with:
           name: deb-${{ matrix.suite.name }}-${{ matrix.runner.arch }}

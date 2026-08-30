@@ -1,27 +1,91 @@
-.TH DR-CHARM 1 "2026-08-26" "dr-charm 0.0.1" "User Commands"
+.TH DR-CHARM 1 "2026-08-30" "dr-charm" "User Commands"
 .SH NAME
 dr-charm \- DragonRealms terminal client
 .SH SYNOPSIS
 .B dr-charm
-.RB [ -config " " \fIPATH\fR ]
+.RB [ -c | --config " " \fIPATH\fR ]
+.RB [ -n | --no-log ]
 .br
 .B dr-charm
-.B -version
+.RB [ -V | --version ]
+.br
+.B dr-charm
+.RB [ -h | --help ]
 .SH DESCRIPTION
 .B dr-charm
 authenticates to DragonRealms and renders a terminal interface.
+The status bar shows connection and logging state. A disconnect remains visible
+while the session closes or reconnects, and pane output can be scrolled.
+.SH INTERFACE
+.TP
+.B Enter
+Send the command line.
+.TP
+.B Ctrl-G
+Open the command line in \fB$VISUAL\fR or \fB$EDITOR\fR.
+.TP
+.B Page Up, Page Down, Home, End
+Scroll the focused pane.
+.TP
+.B Tab
+Cycle panes with scrollable content.
+.TP
+.B Shift-Tab
+Cycle panes in reverse.
+.TP
+.B F1
+Show help.
+.TP
+.B F2
+Toggle multi-pane and single-pane views.
+.TP
+.B F3
+Select a theme.
+.TP
+.B F4
+Toggle session logging.
 .SH OPTIONS
 .TP
-.BI -config " PATH"
-Read credentials from PATH instead of the default configuration locations.
+.BI --config " PATH"
+Read credentials from PATH instead of the XDG default configuration file.
 .TP
-.B -version
+.BI -c " PATH"
+Short form of \fB--config\fR.
+.TP
+.B --no-log
+Disable the session transcript for this run. Logging is enabled by default.
+.TP
+.B -n
+Short form of \fB--no-log\fR.
+.TP
+.B --version
 Print the installed version without reading configuration or opening a network
 connection.
+.TP
+.B -V
+Short form of \fB--version\fR.
+.TP
+.B --help
+Print help to standard output.
+.TP
+.B -h
+Short form of \fB--help\fR.
 .SH FILES
 .TP
-.I ~/.config/dr-charm/config.yaml
-Preferred configuration file containing account credentials.
+.I $XDG_CONFIG_HOME/dr-charm/config.yaml
+Default configuration file containing account credentials. A first run with no
+configuration creates a commented template with owner-only permissions and exits.
+When \fBXDG_CONFIG_HOME\fR is unset, use \fI~/.config/dr-charm/config.yaml\fR.
+.TP
+.I $XDG_CONFIG_HOME/dr-charm/themes
+Custom theme JSON files. When \fBXDG_CONFIG_HOME\fR is unset, use
+\fI~/.config/dr-charm/themes\fR.
+.TP
+.I $XDG_STATE_HOME/dr-charm/logs
+Session transcripts. When \fBXDG_STATE_HOME\fR is unset, use
+\fI~/.local/state/dr-charm/logs\fR. New directories are owner-only and
+closed logs are retained up to 30 files and 100 MiB as a soft limit.
 .SH SECURITY
-Configuration files contain account credentials and should be readable only by
-their owner.
+Configuration files and logs contain account data. New configuration files and
+logs are readable only by their owner. Existing configuration modes are accepted.
+The production binary does not read credential environment variables.

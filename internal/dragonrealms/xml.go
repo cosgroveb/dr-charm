@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"dr-charm/internal/terminaltext"
 )
 
 const defaultMaxPendingMarkup = 1 << 20
@@ -426,17 +428,17 @@ func (d *streamDecoder) handleMarkup(raw []byte) []protocolEvent {
 			if d.compassData.Len() > 0 {
 				d.compassData.WriteByte(' ')
 			}
-			d.compassData.WriteString(attrs["value"])
+			d.compassData.WriteString(cleanInline(attrs["value"]))
 		} else if !d.compass {
 			events = append(events, protocolEvent{kind: eventDiagnostic, value: "unknown DragonRealms dir outside compass"})
 		}
 	case "d":
 		if !self {
-			d.linkStack = append(d.linkStack, openSpan{start: d.currentRuneLen(), target: attrs["cmd"]})
+			d.linkStack = append(d.linkStack, openSpan{start: d.currentRuneLen(), target: cleanInline(attrs["cmd"])})
 		}
 	case "a":
 		if !self {
-			d.linkStack = append(d.linkStack, openSpan{start: d.currentRuneLen(), target: attrs["href"], url: true})
+			d.linkStack = append(d.linkStack, openSpan{start: d.currentRuneLen(), target: cleanInline(attrs["href"]), url: true})
 		}
 	case "pushbold":
 		d.pushBold()
@@ -466,15 +468,15 @@ func (d *streamDecoder) handleMarkup(raw []byte) []protocolEvent {
 		}
 	case "nav":
 		if attrs["rm"] != "" {
-			events = append(events, protocolEvent{kind: eventNav, value: attrs["rm"]})
+			events = append(events, protocolEvent{kind: eventNav, value: cleanInline(attrs["rm"])})
 		}
 	case "app":
 		if attrs["char"] != "" {
-			events = append(events, protocolEvent{kind: eventApp, name: attrs["char"], value: attrs["game"], aux: attrs["title"]})
+			events = append(events, protocolEvent{kind: eventApp, name: cleanInline(attrs["char"]), value: cleanInline(attrs["game"]), aux: cleanInline(attrs["title"])})
 		}
 	case "container":
 		if attrs["target"] != "" {
-			events = append(events, protocolEvent{kind: eventContainer, name: attrs["id"], value: attrs["title"], aux: attrs["target"]})
+			events = append(events, protocolEvent{kind: eventContainer, name: cleanInline(attrs["id"]), value: cleanInline(attrs["title"]), aux: cleanInline(attrs["target"])})
 		}
 	case "dialogdata":
 		d.dialogInjuries = strings.EqualFold(attrs["id"], "injuries") && !self
@@ -489,10 +491,11 @@ func (d *streamDecoder) handleMarkup(raw []byte) []protocolEvent {
 		events = append(events, protocolEvent{kind: eventEndSetup})
 	case "clearstream", "cleardynastream":
 		flush()
-		events = append(events, protocolEvent{kind: eventDisplay, display: DisplayEvent{Kind: DisplayClear, Stream: attrs["id"], ID: attrs["id"]}})
+		stream := cleanInline(attrs["id"])
+		events = append(events, protocolEvent{kind: eventDisplay, display: DisplayEvent{Kind: DisplayClear, Stream: stream, ID: stream}})
 	case "streamwindow", "openwindow":
 		flush()
-		events = append(events, protocolEvent{kind: eventDisplay, display: DisplayEvent{Kind: DisplayWindow, ID: attrs["id"], Title: attrs["title"]}})
+		events = append(events, protocolEvent{kind: eventDisplay, display: DisplayEvent{Kind: DisplayWindow, ID: cleanInline(attrs["id"]), Title: cleanInline(attrs["title"])}})
 		if strings.EqualFold(attrs["id"], "room") {
 			title, id := roomSubtitle(attrs["subtitle"])
 			if title != "" {
@@ -564,7 +567,7 @@ func (d *streamDecoder) handleClose(name string) []protocolEvent {
 		if d.prompt == nil {
 			return nil
 		}
-		value := strings.TrimSpace(html.UnescapeString(strings.ToValidUTF8(d.prompt.String(), "�")))
+		value := strings.TrimSpace(cleanText(d.prompt.String()))
 		d.prompt = nil
 		return []protocolEvent{{kind: eventPrompt, value: value, timestamp: d.promptTime}}
 	case "d", "a":
@@ -822,17 +825,17 @@ func (d *streamDecoder) popBold() {
 
 func cleanText(value string) string {
 	value = strings.ToValidUTF8(value, "�")
-	value = ansiPattern.ReplaceAllString(value, "")
 	value = leakedXMLPattern.ReplaceAllString(value, "")
 	value = html.UnescapeString(value)
+	value = terminaltext.Sanitize(value)
 	return strings.TrimRight(value, " \t\r\n")
 }
 
 func cleanInline(value string) string {
 	value = strings.ToValidUTF8(value, "�")
-	value = ansiPattern.ReplaceAllString(value, "")
 	value = leakedXMLPattern.ReplaceAllString(value, "")
-	return html.UnescapeString(value)
+	value = html.UnescapeString(value)
+	return terminaltext.Sanitize(value)
 }
 
 func adjustLinks(raw string, spans []LinkSpan) []LinkSpan {

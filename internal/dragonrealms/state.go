@@ -1,12 +1,15 @@
 package dragonrealms
 
 import (
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"dr-charm/internal/terminaltext"
 )
 
 type creatureStatus struct {
@@ -76,7 +79,7 @@ var knownFlags = func() map[string]string {
 
 func newReducer(character string) *reducer {
 	return &reducer{
-		public:           Snapshot{Connection: ConnectionConnected, Character: character},
+		public:           Snapshot{Connection: ConnectionConnected, Character: terminaltext.Sanitize(character)},
 		components:       make(map[string]string),
 		resources:        make(map[string]int),
 		indicators:       make(map[string]bool),
@@ -205,7 +208,74 @@ func (r *reducer) applyAt(action protocolAction, now time.Time) (Update, bool) {
 	}
 	update.Snapshot = r.snapshot()
 	update.Display = cloneDisplay(update.Display)
+	sanitizeUpdate(&update)
 	return update, true
+}
+
+func sanitizeUpdate(update *Update) {
+	update.Snapshot.Character = terminaltext.Sanitize(update.Snapshot.Character)
+	update.Snapshot.Prompt = terminaltext.Sanitize(update.Snapshot.Prompt)
+	sanitizeRoom(&update.Snapshot.Room)
+	update.Snapshot.Hands.Left = terminaltext.Sanitize(update.Snapshot.Hands.Left)
+	update.Snapshot.Hands.Right = terminaltext.Sanitize(update.Snapshot.Hands.Right)
+	update.Snapshot.PreparedSpell = terminaltext.Sanitize(update.Snapshot.PreparedSpell)
+	for i := range update.Display {
+		d := &update.Display[i]
+		d.Stream = terminaltext.Sanitize(d.Stream)
+		d.Text = terminaltext.Sanitize(d.Text)
+		d.ID = terminaltext.Sanitize(d.ID)
+		d.Title = terminaltext.Sanitize(d.Title)
+		for i := range d.Links {
+			d.Links[i].Target = terminaltext.Sanitize(d.Links[i].Target)
+		}
+		limitSpans(d)
+	}
+	for i := range update.Diagnostics {
+		update.Diagnostics[i].Text = sanitizeDiagnostic(update.Diagnostics[i].Text)
+	}
+	if update.Err != nil {
+		update.Err = errors.New(sanitizeDiagnostic(update.Err.Error()))
+	}
+}
+
+func sanitizeRoom(room *Room) {
+	room.ID = terminaltext.Sanitize(room.ID)
+	room.Title = terminaltext.Sanitize(room.Title)
+	room.Description = terminaltext.Sanitize(room.Description)
+	room.Image = terminaltext.Sanitize(room.Image)
+	for _, values := range []*[]string{&room.Exits, &room.Objects, &room.Players, &room.Creatures, &room.Compass} {
+		for i := range *values {
+			(*values)[i] = terminaltext.Sanitize((*values)[i])
+		}
+	}
+}
+
+func limitSpans(display *DisplayEvent) {
+	limit := len([]rune(display.Text))
+	clamp := func(span *Span) {
+		if span.Start < 0 {
+			span.Start = 0
+		}
+		if span.Start > limit {
+			span.Start = limit
+		}
+		if span.Length < 0 {
+			span.Length = 0
+		}
+		if span.Length > limit-span.Start {
+			span.Length = limit - span.Start
+		}
+	}
+	for i := range display.Links {
+		clamp(&display.Links[i].Span)
+	}
+	for i := range display.Bold {
+		clamp(&display.Bold[i])
+	}
+	for i := range display.Presets {
+		display.Presets[i].ID = terminaltext.Sanitize(display.Presets[i].ID)
+		clamp(&display.Presets[i].Span)
+	}
 }
 
 func (r *reducer) applyComponent(event protocolEvent) {

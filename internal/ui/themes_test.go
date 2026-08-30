@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"dr-charm/internal/dragonrealms"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"dr-charm/internal/presentation"
+	"github.com/charmbracelet/colorprofile"
 )
 
 func TestThemeCatalogBuiltins(t *testing.T) {
@@ -55,8 +55,23 @@ func TestThemeCatalogRejectsInvalidCustomThemes(t *testing.T) {
 	writeThemeFile(t, directory, "whitespace.json", `{"name":"   "}`)
 
 	want := []string{"default", "dark", "high-contrast"}
-	if got := newThemeCatalog(directory).names(); !reflect.DeepEqual(got, want) {
+	catalog := newThemeCatalog(directory)
+	if got := catalog.names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("names = %#v, want %#v", got, want)
+	}
+	if len(catalog.warnings) != 3 {
+		t.Fatalf("warnings = %#v", catalog.warnings)
+	}
+}
+
+func TestThemeCatalogDoesNotCreateMissingDirectory(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing", "themes")
+	catalog := newThemeCatalog(missing)
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("missing theme directory was created: %v", err)
+	}
+	if len(catalog.warnings) != 0 {
+		t.Fatalf("warnings = %#v", catalog.warnings)
 	}
 }
 
@@ -142,14 +157,18 @@ func TestThemeSelectorUsesCatalogOrderAndNavigation(t *testing.T) {
 
 func TestSelectedCustomThemeRendersEveryProperty(t *testing.T) {
 	useANSI256(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	themesDirectory := filepath.Join(home, ".dr-charm", "themes")
+	root := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg-config"))
+	themesDirectory := filepath.Join(root, "custom-themes")
 	if err := os.MkdirAll(themesDirectory, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeThemeFile(t, themesDirectory, "custom.json", completeCustomThemeJSON("custom"))
-	model := InitialEnhancedModel(&fakeSession{updates: make(chan dragonrealms.Update)}, "Hero")
+	model := InitialEnhancedModel(&fakeSession{updates: make(chan presentation.Update)}, Options{
+		Character: "Hero",
+		LogDir:    t.TempDir(),
+		ThemeDir:  themesDirectory,
+	})
 	for range 3 {
 		model = model.handleThemeKeys(keyDown())
 	}
@@ -198,11 +217,11 @@ func writeThemeFile(t *testing.T, directory, name, contents string) {
 
 func useANSI256(t *testing.T) {
 	t.Helper()
-	profile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.ANSI256)
-	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+	profile := lipgloss.Writer.Profile
+	lipgloss.Writer.Profile = colorprofile.ANSI256
+	t.Cleanup(func() { lipgloss.Writer.Profile = profile })
 }
 
-func keyDown() tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyDown}
+func keyDown() tea.KeyPressMsg {
+	return tea.KeyPressMsg(tea.Key{Code: tea.KeyDown})
 }

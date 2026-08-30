@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 func TestBuiltInHighlights(t *testing.T) {
@@ -146,9 +146,9 @@ func BenchmarkProcessLineMiss(b *testing.B) {
 
 func useANSI256(t *testing.T) {
 	t.Helper()
-	profile := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.ANSI256)
-	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+	profile := lipgloss.Writer.Profile
+	lipgloss.Writer.Profile = colorprofile.ANSI256
+	t.Cleanup(func() { lipgloss.Writer.Profile = profile })
 }
 
 func ansi256(text, foreground, background string) string {
@@ -159,5 +159,5 @@ func ansi256(text, foreground, background string) string {
 	if background != "" {
 		codes = append(codes, "48;5;"+background)
 	}
-	return "\x1b[" + strings.Join(codes, ";") + "m" + text + "\x1b[0m"
+	return "\x1b[" + strings.Join(codes, ";") + "m" + text + "\x1b[m"
 }

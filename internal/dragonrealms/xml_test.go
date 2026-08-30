@@ -267,6 +267,29 @@ func TestTextSpansStayWithinTrimmedDisplayText(t *testing.T) {
 	}
 }
 
+func TestXMLTerminalControlsAreSanitizedBeforeSpanMapping(t *testing.T) {
+	t.Parallel()
+
+	input := "<d cmd='look &#27;]52;c;secret&#7;north'>north &#27;[31mred</d>&#27;]52;c;secret&#7;\n<prompt time='1'>&#27;P@kitty-cmd {\"cmd\":\"launch\"}&#27;\\&gt;</prompt>"
+	want := decodeEvents(input)
+	if len(want) != 2 {
+		t.Fatalf("events = %#v", want)
+	}
+	display := want[0].display
+	if display.Text != "north red" {
+		t.Fatalf("display text = %q", display.Text)
+	}
+	if len(display.Links) != 1 || display.Links[0].Target != "look north" {
+		t.Fatalf("links = %#v", display.Links)
+	}
+	if want[1].value != ">" {
+		t.Fatalf("prompt = %q", want[1].value)
+	}
+	assertDisplaySpansInBounds(t, display)
+	assertNoUnsafeControls(t, display.Text+display.Links[0].Target+want[1].value)
+	assertFinishedAtEverySplit(t, input, want)
+}
+
 func TestTextDuplicateEchoAndBlankRules(t *testing.T) {
 	t.Parallel()
 
@@ -793,5 +816,17 @@ func assertDisplaySpansInBounds(t *testing.T, display DisplayEvent) {
 	}
 	for _, preset := range display.Presets {
 		check("preset", preset.Span)
+	}
+}
+
+func assertNoUnsafeControls(t *testing.T, text string) {
+	t.Helper()
+	for _, r := range text {
+		if r == '\n' || r == '\t' {
+			continue
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			t.Fatalf("unsafe control %#U leaked in %q", r, text)
+		}
 	}
 }

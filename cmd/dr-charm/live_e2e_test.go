@@ -11,6 +11,7 @@ import (
 
 	"dr-charm/internal/config"
 	"dr-charm/internal/dragonrealms"
+	"dr-charm/internal/dragonrealms/presenter"
 	"dr-charm/internal/ui"
 )
 
@@ -36,7 +37,7 @@ func TestDragonRealmsEndToEnd(t *testing.T) {
 				t.Fatalf("DragonRealms session ended before a ready room and prompt: %v", update.Err)
 			}
 			observed = update.Snapshot
-			updated, _ := model.Update(update)
+			updated, _ := model.Update(presenter.Translate(update))
 			model = updated.(ui.EnhancedModel)
 		case <-ctx.Done():
 			t.Fatalf("wait for a ready DragonRealms room and prompt: %v", ctx.Err())
@@ -44,10 +45,10 @@ func TestDragonRealmsEndToEnd(t *testing.T) {
 	}
 
 	view := model.View()
-	if !strings.Contains(view, observed.Room.Title) {
+	if !strings.Contains(view.Content, observed.Room.Title) {
 		t.Fatal("rendered UI does not contain the observed room title")
 	}
-	if !strings.Contains(view, observed.Prompt) {
+	if !strings.Contains(view.Content, observed.Prompt) {
 		t.Fatal("rendered UI does not contain the observed prompt")
 	}
 

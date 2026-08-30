@@ -58,7 +58,7 @@ if [ "$actual_paths" != "$expected_paths" ]; then
 fi
 
 test -x "$work_dir/root/usr/bin/dr-charm"
-if [ "$("$work_dir/root/usr/bin/dr-charm" -version)" != "dr-charm $version" ]; then
+if [ "$("$work_dir/root/usr/bin/dr-charm" --version)" != "dr-charm $version" ]; then
   printf 'installed binary reported an unexpected version\n' >&2
   exit 1
 fi

@@ -585,6 +585,34 @@ func TestCloseBetweenReconnectEligibilityAndTransitionStaysClosed(t *testing.T) 
 	}
 }
 
+func TestSessionPublishSanitizesDirectUpdates(t *testing.T) {
+	session := &Session{ctx: context.Background(), updates: make(chan Update, 1)}
+	raw := Update{
+		Snapshot: Snapshot{
+			Character: "Hero\x1b]52;c;secret\a",
+			Prompt:    ">\x1bP@kitty-cmd{}\x1b\\",
+			Room:      Room{Title: "[Room]\x9d52;c;secret\x9c"},
+		},
+		Display: []DisplayEvent{{
+			Text:  "north\x1b[31m",
+			Links: []LinkSpan{{Span: Span{Start: 0, Length: 5}, Target: "look\x1b]52;c;secret\a"}},
+		}},
+	}
+	if !session.publish(raw) {
+		t.Fatal("publish failed")
+	}
+	got := <-session.Updates()
+	combined := got.Snapshot.Character + got.Snapshot.Prompt + got.Snapshot.Room.Title + got.Display[0].Text + got.Display[0].Links[0].Target
+	for _, r := range combined {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			t.Fatalf("unsafe control %#U leaked through direct publish: %#v", r, got)
+		}
+	}
+	if got.Display[0].Text != "north" || got.Display[0].Links[0].Target != "look" {
+		t.Fatalf("direct publish values = %#v", got.Display[0])
+	}
+}
+
 func TestCommandWriteFailureDoesNotArmReconnect(t *testing.T) {
 	conn := &commandWriteErrorConn{scriptedConn: newScriptedConn()}
 	options := testSessionOptions(conn)
