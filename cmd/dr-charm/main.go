@@ -182,6 +182,10 @@ Configuration:
   A first run with no config creates a commented template and exits.
   Production credential environment variables are not read.
 
+Maps:
+  Learned map: $XDG_DATA_HOME/dr-charm/maps/Map00_Learned.xml
+  Fallback: ~/.local/share/dr-charm/maps/Map00_Learned.xml
+
 Examples:
   dr-charm
   dr-charm --config ~/.config/dr-charm/config.yaml
@@ -205,7 +209,7 @@ func newApplicationWithOptions(ctx context.Context, cfg config.Config, paths use
 	if err != nil {
 		return nil, ui.EnhancedModel{}, err
 	}
-	return session, ui.InitialEnhancedModel(presenter.New(session), ui.Options{
+	return session, ui.InitialEnhancedModel(presenter.New(session, paths.MapDir), ui.Options{
 		Character: cfg.Character,
 		LogDir:    paths.LogDir,
 		ThemeDir:  paths.ThemeDir,

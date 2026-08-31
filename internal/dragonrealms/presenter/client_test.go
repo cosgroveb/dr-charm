@@ -34,7 +34,7 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 		Diagnostics: []dragonrealms.Diagnostic{{Text: "diagnostic"}},
 	}
 
-	got, ok := newClient(source).Next()
+	got, ok := newClient(source, t.TempDir()).Next()
 	if !ok {
 		t.Fatal("Next closed unexpectedly")
 	}
@@ -48,6 +48,7 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 		{Label: "C", Value: "50%"},
 		{Label: "Sp", Value: "60%"},
 		{Label: "Posture", Value: "Standing"},
+		{Label: "Map", Value: "#1/1 rooms"},
 	}; !reflect.DeepEqual(got.Status, want) {
 		t.Fatalf("status = %#v, want %#v", got.Status, want)
 	}
@@ -60,6 +61,9 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 		if !strings.Contains(body, value) {
 			t.Fatalf("projection omitted %q from %q", value, body)
 		}
+	}
+	if !strings.Contains(got.Map, "@ #1 [Room]") {
+		t.Fatalf("map projection = %q", got.Map)
 	}
 	for _, entry := range got.Entries {
 		if entry.Text == "duplicate" {
@@ -84,7 +88,7 @@ func TestClientSanitizesNoticesAndVisibleFields(t *testing.T) {
 		Err:         errors.New("boom\x1b]52;c;secret\a"),
 	}
 
-	got, ok := newClient(source).Next()
+	got, ok := newClient(source, t.TempDir()).Next()
 	if !ok {
 		t.Fatal("Next closed unexpectedly")
 	}
@@ -108,7 +112,8 @@ func TestClientSanitizesNoticesAndVisibleFields(t *testing.T) {
 
 func TestClientSendForwardsCommands(t *testing.T) {
 	source := &fakeSource{updates: make(chan dragonrealms.Update)}
-	if err := newClient(source).Send("l"); err != nil {
+	client := newClient(source, t.TempDir())
+	if err := client.Send("l"); err != nil {
 		t.Fatal(err)
 	}
 	if got := source.sent; len(got) != 1 || got[0] != "l" {
@@ -119,19 +124,53 @@ func TestClientSendForwardsCommands(t *testing.T) {
 func TestClientNextClosesWithSource(t *testing.T) {
 	source := &fakeSource{updates: make(chan dragonrealms.Update)}
 	close(source.updates)
-	if _, ok := newClient(source).Next(); ok {
+	if _, ok := newClient(source, t.TempDir()).Next(); ok {
 		t.Fatal("Next returned ok after source close")
+	}
+}
+
+func TestClientFeedsMapperSuccessfulCommandsOnly(t *testing.T) {
+	source := &fakeSource{updates: make(chan dragonrealms.Update, 3)}
+	client := newClient(source, t.TempDir())
+	source.updates <- dragonrealms.Update{Snapshot: dragonrealms.Snapshot{Room: dragonrealms.Room{Title: "[One]", Exits: []string{"north"}}}}
+	if _, ok := client.Next(); !ok {
+		t.Fatal("first update closed")
+	}
+	if err := client.Send("north"); err != nil {
+		t.Fatal(err)
+	}
+	source.updates <- dragonrealms.Update{Snapshot: dragonrealms.Snapshot{Room: dragonrealms.Room{Title: "[Two]", Exits: []string{"south"}}}}
+	got, ok := client.Next()
+	if !ok {
+		t.Fatal("second update closed")
+	}
+	if !strings.Contains(got.Map, "│") {
+		t.Fatalf("successful movement did not add map edge:\n%s", got.Map)
+	}
+
+	source.err = errors.New("send failed")
+	if err := client.Send("south"); err == nil {
+		t.Fatal("send unexpectedly succeeded")
+	}
+	source.updates <- dragonrealms.Update{Snapshot: dragonrealms.Snapshot{Room: dragonrealms.Room{Title: "[Three]", Exits: []string{"north"}}}}
+	got, ok = client.Next()
+	if !ok {
+		t.Fatal("third update closed")
+	}
+	if strings.Contains(got.Map, "#3") && strings.Contains(got.Map, "south") {
+		t.Fatalf("failed movement affected map:\n%s", got.Map)
 	}
 }
 
 type fakeSource struct {
 	updates chan dragonrealms.Update
 	sent    []string
+	err     error
 }
 
 func (s *fakeSource) Updates() <-chan dragonrealms.Update { return s.updates }
 
 func (s *fakeSource) Send(command string) error {
 	s.sent = append(s.sent, command)
-	return nil
+	return s.err
 }

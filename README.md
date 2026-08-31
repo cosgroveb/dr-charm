@@ -104,8 +104,9 @@ also stops startup instead of falling through to a later file.
 ## Interface
 
 The default view has game, room, hands, and familiar panes. The status bar
-shows health, mana, fatigue, concentration, spirit, and posture. Common command
-aliases such as `l` for `look` and `n` for `north` are expanded before sending.
+shows health, mana, fatigue, concentration, spirit, posture, and learned-map
+position. Common command aliases such as `l` for `look` and `n` for `north` are
+expanded before sending.
 
 Keys:
 
@@ -120,6 +121,7 @@ Keys:
 - `F2`: switch between multi-pane and single-pane views
 - `F3`: choose a theme
 - `F4`: toggle session logging
+- `F5`: toggle the right-side slot between Room and Map
 - `Ctrl+C`: quit
 
 The connection and logging state are shown in the status bar. A disconnect is
@@ -132,6 +134,14 @@ so protect them like other account data. Logging is enabled by default and can
 be disabled with `--no-log` or toggled with `F4`. New log directories are 0700
 and log files are 0600. Closed matching files are retained up to 30 files and
 100 MiB as a soft limit.
+
+The mapper learns by default. The first seen room starts at `(0,0,0)`, and a
+later login in unrelated geography starts a disconnected cluster instead of
+overlapping the first one. Learned maps are written as Genie-compatible XML at
+`$XDG_DATA_HOME/dr-charm/maps/Map00_Learned.xml` (or
+`~/.local/share/dr-charm/maps/Map00_Learned.xml`). The first mapper slice has no
+community map updater, pathfinder, route command, map editor, or learning
+toggle.
 
 Custom themes are JSON files under `$XDG_CONFIG_HOME/dr-charm/themes/` (or
 `~/.config/dr-charm/themes`). Each file contains
@@ -167,8 +177,9 @@ file can replace a built-in theme without moving its position.
 command serialization, reconnect behavior, XML decoding, and canonical game
 state. It publishes detached `Update` values containing a semantic `Snapshot`
 and display events. `internal/dragonrealms/presenter` translates those updates
-into `internal/presentation` values for the UI; the UI does not read sockets or
-parse XML.
+into `internal/presentation` values for the UI, feeds the learned mapper, and
+publishes pane-ready map text. The UI does not read sockets, parse XML, or learn
+rooms.
 
 `cmd/dr-charm` only loads configuration, creates the session and UI, and runs
 Bubble Tea. Aliases, highlighting, themes, and logging remain UI concerns.

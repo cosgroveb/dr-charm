@@ -97,7 +97,7 @@ func TestExecuteRunsApplicationWithConfigAndNoLog(t *testing.T) {
 	var gotLogging bool
 	deps := dependencies{
 		resolvePaths: func() (userdirs.Paths, error) {
-			return userdirs.Paths{ConfigFile: "/tmp/config.yaml", ThemeDir: "/tmp/themes", LogDir: "/tmp/logs"}, nil
+			return userdirs.Paths{ConfigFile: "/tmp/config.yaml", ThemeDir: "/tmp/themes", LogDir: "/tmp/logs", MapDir: "/tmp/maps"}, nil
 		},
 		loadConfig: func(explicit, defaultPath string) (config.Result, error) {
 			if explicit != "/chosen.yaml" || defaultPath != "/tmp/config.yaml" {
@@ -106,7 +106,7 @@ func TestExecuteRunsApplicationWithConfigAndNoLog(t *testing.T) {
 			return config.Result{Config: config.Config{Account: "a", Password: "p", Character: "c"}}, nil
 		},
 		runApp: func(_ context.Context, cfg config.Config, paths userdirs.Paths, logging bool) error {
-			if cfg.Character != "c" || paths.LogDir != "/tmp/logs" || paths.ThemeDir != "/tmp/themes" {
+			if cfg.Character != "c" || paths.LogDir != "/tmp/logs" || paths.ThemeDir != "/tmp/themes" || paths.MapDir != "/tmp/maps" {
 				t.Fatalf("app args cfg=%+v paths=%+v", cfg, paths)
 			}
 			gotLogging = logging

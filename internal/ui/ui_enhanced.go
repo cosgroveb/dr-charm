@@ -67,6 +67,7 @@ type EnhancedModel struct {
 
 	mainOutput     []string
 	roomOutput     []string
+	mapOutput      []string
 	handsOutput    []string
 	familiarOutput []string
 	mainViewport   viewport.Model
@@ -75,6 +76,7 @@ type EnhancedModel struct {
 	familiarView   viewport.Model
 	activePane     string
 	unread         map[string]bool
+	showMap        bool
 }
 
 type Options struct {
@@ -204,6 +206,9 @@ func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {
 	if update.Connection != previousConnection {
 		m.appendSystem("connection: " + connectionText(update.Connection))
 	}
+	if update.Map != "" {
+		m.replaceMap(splitLines(update.Map))
+	}
 	for _, entry := range update.Entries {
 		switch entry.Operation {
 		case presentation.Clear:
@@ -253,6 +258,9 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 		return m, nil
 	case tea.KeyF4:
 		m.toggleLogging()
+		return m, nil
+	case tea.KeyF5:
+		m.toggleMap()
 		return m, nil
 	case tea.KeyTab:
 		if m.viewMode == ViewModeMulti {
@@ -541,6 +549,9 @@ func (m *EnhancedModel) viewportFor(pane string) *viewport.Model {
 func (m EnhancedModel) linesFor(pane string) []string {
 	switch pane {
 	case paneRoom:
+		if m.showMap {
+			return m.mapOutput
+		}
 		return m.roomOutput
 	case paneHands:
 		return m.handsOutput
@@ -604,6 +615,7 @@ F1          Show this help
 F2          Toggle multi/single-pane view
 F3          Select theme
 F4          Toggle logging
+F5          Toggle Room/Map pane
 Tab         Cycle input and visible panes
 PgUp/PgDn   Scroll active pane
 Home/End    Jump active pane
@@ -668,9 +680,13 @@ func (m EnhancedModel) renderInputPane() string {
 }
 
 func (m EnhancedModel) paneViews() paneViews {
+	roomTitle := "Room"
+	if m.showMap {
+		roomTitle = "Map"
+	}
 	return paneViews{
 		main:     paneView{title: "Game", body: m.mainViewport.View(), active: m.activePane == paneMain, unread: m.unread[paneMain]},
-		room:     paneView{title: "Room", body: m.roomViewport.View(), active: m.activePane == paneRoom, unread: m.unread[paneRoom]},
+		room:     paneView{title: roomTitle, body: m.roomViewport.View(), active: m.activePane == paneRoom, unread: m.unread[paneRoom]},
 		hands:    paneView{title: "Hands", body: m.handsViewport.View(), active: m.activePane == paneHands, unread: m.unread[paneHands]},
 		familiar: paneView{title: "Familiar", body: m.familiarView.View(), active: m.activePane == paneFamiliar, unread: m.unread[paneFamiliar], visible: familiarAvailable(m.familiarOutput)},
 	}
@@ -751,6 +767,27 @@ func (m *EnhancedModel) toggleLogging() {
 		return
 	}
 	m.startLogging()
+}
+
+func (m *EnhancedModel) toggleMap() {
+	m.showMap = !m.showMap
+	m.refreshPane(paneRoom, true)
+	m.unread[paneRoom] = false
+}
+
+func (m *EnhancedModel) replaceMap(lines []string) {
+	if equalLines(m.mapOutput, lines) {
+		return
+	}
+	wasActive := m.activePane == paneRoom
+	wasBottom := m.roomViewport.AtBottom()
+	m.mapOutput = append([]string(nil), lines...)
+	if m.showMap {
+		m.refreshPanePreservingOffset(paneRoom, wasBottom)
+		if !wasActive {
+			m.unread[paneRoom] = true
+		}
+	}
 }
 
 func connectionText(state presentation.ConnectionState) string {

@@ -45,6 +45,9 @@ Select a theme.
 .TP
 .B F4
 Toggle session logging.
+.TP
+.B F5
+Toggle the right-side slot between Room and Map.
 .SH OPTIONS
 .TP
 .BI --config " PATH"
@@ -86,6 +89,10 @@ Custom theme JSON files. When \fBXDG_CONFIG_HOME\fR is unset, use
 Session transcripts. When \fBXDG_STATE_HOME\fR is unset, use
 \fI~/.local/state/dr-charm/logs\fR. New directories are owner-only and
 closed logs are retained up to 30 files and 100 MiB as a soft limit.
+.TP
+.I $XDG_DATA_HOME/dr-charm/maps/Map00_Learned.xml
+Learned Genie-compatible map XML. When \fBXDG_DATA_HOME\fR is unset, use
+\fI~/.local/share/dr-charm/maps/Map00_Learned.xml\fR.
 .SH SECURITY
 Configuration files and logs contain account data. New configuration files and
 logs are readable only by their owner. Existing configuration modes are accepted.

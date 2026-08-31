@@ -10,6 +10,7 @@ type Paths struct {
 	ConfigFile string
 	ThemeDir   string
 	LogDir     string
+	MapDir     string
 }
 
 func Resolve() (Paths, error) {
@@ -21,11 +22,16 @@ func Resolve() (Paths, error) {
 	if err != nil {
 		return Paths{}, err
 	}
+	dataBase, err := base("XDG_DATA_HOME", filepath.Join(".local", "share"))
+	if err != nil {
+		return Paths{}, err
+	}
 	root := filepath.Join(configBase, "dr-charm")
 	return Paths{
 		ConfigFile: filepath.Join(root, "config.yaml"),
 		ThemeDir:   filepath.Join(root, "themes"),
 		LogDir:     filepath.Join(stateBase, "dr-charm", "logs"),
+		MapDir:     filepath.Join(dataBase, "dr-charm", "maps"),
 	}, nil
 }
 

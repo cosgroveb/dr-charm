@@ -38,6 +38,10 @@ compatibility layers for the removed prototype, or features for other clients.
    consumes presentation updates and sends commands through that client. The UI
    owns presentation history, aliases, highlighting, themes, and logging. It
    must not know XML tags, SGE fields, endpoints, socket rules, or retry policy.
+6. `internal/mapper` owns learned map state, Genie-compatible map XML, room
+   matching, graph edges, persistence, and terminal map rendering. The presenter
+   feeds it sanitized room snapshots and successful commands. The UI only
+   toggles between the Room projection and pane-ready map text.
 
 Do not introduce a second socket reader, socket writer, protocol parser, or
 mutable game-state owner. `Snapshot.Connection` is the connection truth exposed
@@ -61,6 +65,8 @@ tuple.
 `$XDG_CONFIG_HOME/dr-charm/themes` contains custom themes. Session logs use
 `$XDG_STATE_HOME/dr-charm/logs`, with `~/.config` and `~/.local/state` fallbacks.
 New log directories are 0700 and new log files are 0600.
+Learned maps use `$XDG_DATA_HOME/dr-charm/maps`, with
+`~/.local/share/dr-charm/maps` as the fallback.
 
 ## Terminal text and presentation
 
@@ -108,6 +114,8 @@ DR_E2E_CONFIG=/path/to/config.yaml \
 - Keep one reason per change and avoid unrelated cleanup.
 - Preserve the single Session boundary instead of adding adapters or producer
   interfaces.
+- Keep map learning in `internal/mapper`. Do not let the UI mutate map state or
+  persist map files.
 - Use unexported dependency injection only for package tests. The UI may keep
   its small consumer-owned session interface.
 - Every session goroutine needs a cancellation and join path. Every update send

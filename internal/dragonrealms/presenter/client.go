@@ -2,11 +2,12 @@ package presenter
 
 import (
 	"fmt"
+	"strings"
 
 	"dr-charm/internal/dragonrealms"
+	"dr-charm/internal/mapper"
 	"dr-charm/internal/presentation"
 	"dr-charm/internal/terminaltext"
-	"strings"
 )
 
 type source interface {
@@ -15,19 +16,39 @@ type source interface {
 }
 type Client struct {
 	source source
+	mapper *mapper.Tracker
 }
 
-func New(session *dragonrealms.Session) *Client { return newClient(session) }
-func newClient(s source) *Client                { return &Client{source: s} }
+func New(session *dragonrealms.Session, mapDir string) *Client { return newClient(session, mapDir) }
+func newClient(s source, mapDir string) *Client {
+	return &Client{source: s, mapper: mapper.Open(mapDir)}
+}
 func (c *Client) Send(original string) error {
-	return c.source.Send(original)
+	if err := c.source.Send(original); err != nil {
+		return err
+	}
+	c.mapper.ObserveCommand(original)
+	return nil
 }
 func (c *Client) Next() (presentation.Update, bool) {
 	update, ok := <-c.source.Updates()
 	if !ok {
 		return presentation.Update{}, false
 	}
-	return Translate(update), true
+	return c.translate(update), true
+}
+
+func (c *Client) translate(u dragonrealms.Update) presentation.Update {
+	p := Translate(u)
+	c.mapper.ObserveRoom(mapRoom(u.Snapshot.Room))
+	p.Map = c.mapper.Render()
+	if status := c.mapper.Status(); status != "" {
+		p.Status = append(p.Status, presentation.StatusField{Label: "Map", Value: status})
+	}
+	for _, warning := range c.mapper.Warnings() {
+		p.Notices = append(p.Notices, presentation.Notice{Text: safeNotice(warning)})
+	}
+	return p
 }
 
 func Translate(u dragonrealms.Update) presentation.Update {
@@ -67,6 +88,26 @@ func Translate(u dragonrealms.Update) presentation.Update {
 		p.Notices = append(p.Notices, presentation.Notice{Text: "connection error"})
 	}
 	return p
+}
+
+func mapRoom(room dragonrealms.Room) mapper.Room {
+	return mapper.Room{
+		ID:          terminaltext.Sanitize(room.ID),
+		Title:       terminaltext.Sanitize(room.Title),
+		Description: terminaltext.Sanitize(room.Description),
+		Exits:       sanitizedList(room.Exits),
+	}
+}
+
+func sanitizedList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = terminaltext.Sanitize(value)
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func statusFields(s dragonrealms.Snapshot) []presentation.StatusField {

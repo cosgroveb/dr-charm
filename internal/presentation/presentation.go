@@ -41,4 +41,5 @@ type Update struct {
 	Notices       []Notice
 	Title, Prompt string
 	Character     string
+	Map           string
 }

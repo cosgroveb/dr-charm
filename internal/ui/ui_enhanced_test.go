@@ -249,6 +249,35 @@ func TestEnhancedModelFocusIncludesVisiblePanesAndSinglePaneScrollsGame(t *testi
 	}
 }
 
+func TestEnhancedModelTogglesRoomSlotBetweenRoomAndMap(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 20
+	model.resizePanes()
+	model.applySessionUpdate(presentation.Update{
+		Connection: presentation.Ready,
+		Map:        "@ #1 [Town Square]\nExits: north",
+		Entries: []presentation.Entry{
+			{Pane: presentation.RoomPane, Text: "[Town Square]\n\nA room.", Operation: presentation.Replace},
+		},
+	})
+	if !strings.Contains(model.View().Content, "Room") || strings.Contains(model.View().Content, "@ #1 [Town Square]") {
+		t.Fatalf("default room view wrong:\n%s", model.View().Content)
+	}
+
+	updated, _ := model.Update(key(tea.KeyF5))
+	model = updated.(EnhancedModel)
+	if !model.showMap || !strings.Contains(model.View().Content, "Map") || !strings.Contains(model.View().Content, "@ #1 [Town Square]") {
+		t.Fatalf("map view wrong:\n%s", model.View().Content)
+	}
+
+	updated, _ = model.Update(key(tea.KeyF5))
+	model = updated.(EnhancedModel)
+	if model.showMap || !strings.Contains(model.View().Content, "A room.") {
+		t.Fatalf("room view not restored:\n%s", model.View().Content)
+	}
+}
+
 func TestEnhancedModelInputFocusKeepsCommandEditingKeys(t *testing.T) {
 	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
 	model.width = 80
