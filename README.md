@@ -112,8 +112,9 @@ Keys:
 - `Enter`: send command
 - `Up` and `Down`: command history
 - `Page Up`, `Page Down`, `Home`, and `End`: scroll the active pane
+  (`Home` and `End` edit the command line when Input is focused)
 - `Mouse wheel`: scroll the active pane
-- `Tab` and `Shift+Tab`: cycle panes
+- `Tab` and `Shift+Tab`: cycle Input and visible panes
 - `Ctrl+G`: open the configured command editor
 - `F1`: help
 - `F2`: switch between multi-pane and single-pane views

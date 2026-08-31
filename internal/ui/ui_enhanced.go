@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	paneInput    = "input"
 	paneMain     = "main"
 	paneRoom     = "room"
 	paneHands    = "hands"
@@ -136,7 +137,7 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 		roomViewport:   room,
 		handsViewport:  hands,
 		familiarView:   familiar,
-		activePane:     paneMain,
+		activePane:     paneInput,
 		unread:         map[string]bool{},
 	}
 	for _, warning := range m.themes.warnings {
@@ -243,8 +244,7 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 			m.viewMode = ViewModeMulti
 		} else {
 			m.viewMode = ViewModeSingle
-			m.activePane = paneMain
-			m.unread[paneMain] = false
+			m.activePane = paneInput
 		}
 		return m, nil
 	case tea.KeyF3:
@@ -286,9 +286,15 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 		m.scrollActivePageDown()
 		return m, nil
 	case tea.KeyHome:
+		if m.activePane == paneInput {
+			break
+		}
 		m.activeViewport().GotoTop()
 		return m, nil
 	case tea.KeyEnd:
+		if m.activePane == paneInput {
+			break
+		}
 		m.activeViewport().GotoBottom()
 		return m, nil
 	}
@@ -411,7 +417,7 @@ func (m *EnhancedModel) replacePane(pane string, lines []string) {
 		m.activePane = paneMain
 	}
 	if !containsPane(m.focusablePanes(), m.activePane) {
-		m.activePane = paneMain
+		m.activePane = paneInput
 	}
 }
 
@@ -481,13 +487,7 @@ func (m *EnhancedModel) cyclePane(forward bool) {
 }
 
 func (m EnhancedModel) focusablePanes() []string {
-	order := []string{paneMain}
-	if m.roomViewport.TotalLineCount() > m.roomViewport.Height() {
-		order = append(order, paneRoom)
-	}
-	if m.handsViewport.TotalLineCount() > m.handsViewport.Height() {
-		order = append(order, paneHands)
-	}
+	order := []string{paneInput, paneMain, paneRoom, paneHands}
 	if familiarAvailable(m.familiarOutput) {
 		order = append(order, paneFamiliar)
 	}
@@ -504,10 +504,16 @@ func containsPane(panes []string, pane string) bool {
 }
 
 func (m *EnhancedModel) scrollActivePageUp() {
+	if m.activePane == paneInput {
+		return
+	}
 	m.activeViewport().PageUp()
 }
 
 func (m *EnhancedModel) scrollActivePageDown() {
+	if m.activePane == paneInput {
+		return
+	}
 	m.activeViewport().PageDown()
 	if m.activeViewport().AtBottom() {
 		m.unread[m.activePane] = false
@@ -571,24 +577,23 @@ func (m EnhancedModel) View() tea.View {
 
 func (m EnhancedModel) renderSinglePane() string {
 	theme := m.themes.current()
-	outputHeight := max(m.height-7, 3)
+	outputHeight := max(m.height-8, 3)
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
 	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.StatusBar)).Background(lipgloss.Color(theme.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
 	border := m.themes.borderStyle().Width(m.width - 2)
 	main := m.mainViewport
 	main.SetHeight(max(outputHeight-2, 1))
 	body := main.View()
-	return strings.Join([]string{title, status, border.Render(body), border.Render(m.buildInput())}, "\n")
+	return strings.Join([]string{title, status, border.Render(body), m.renderInputPane()}, "\n")
 }
 
 func (m EnhancedModel) renderMultiPane() string {
 	theme := m.themes.current()
-	layoutHeight := max(m.height-7, 10)
+	layoutHeight := max(m.height-8, 10)
 	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
 	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.StatusBar)).Background(lipgloss.Color(theme.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
-	input := m.themes.borderStyle().Width(m.width - 2).Render(m.buildInput())
 	layout := lipgloss.NewStyle().MaxHeight(layoutHeight).Height(layoutHeight).Render(m.layout.render(m.width, layoutHeight, m.paneViews()))
-	return strings.Join([]string{title, status, layout, input}, "\n")
+	return strings.Join([]string{title, status, layout, m.renderInputPane()}, "\n")
 }
 
 func (m EnhancedModel) renderHelp() string {
@@ -598,7 +603,7 @@ F1          Show this help
 F2          Toggle multi/single-pane view
 F3          Select theme
 F4          Toggle logging
-Tab         Cycle panes
+Tab         Cycle input and visible panes
 PgUp/PgDn   Scroll active pane
 Home/End    Jump active pane
 Up/Down     Command history
@@ -650,6 +655,15 @@ func (m EnhancedModel) buildInput() string {
 	}
 	m.input.Prompt = prompt + " "
 	return m.input.View()
+}
+
+func (m EnhancedModel) renderInputPane() string {
+	title := "Input"
+	style := m.themes.borderStyle().Width(m.width - 2)
+	if m.activePane == paneInput {
+		title = "> " + title
+	}
+	return style.Render(title + "\n" + m.buildInput())
 }
 
 func (m EnhancedModel) paneViews() paneViews {

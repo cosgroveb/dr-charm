@@ -163,16 +163,35 @@ func TestEnhancedModelRoutesPaneUpdatesFocusUnreadAndScroll(t *testing.T) {
 	}
 	updated, _ := model.Update(key(tea.KeyTab))
 	model = updated.(EnhancedModel)
+	if model.activePane != paneMain {
+		t.Fatalf("active pane=%q, want main", model.activePane)
+	}
+	updated, _ = model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
 	if model.activePane != paneRoom {
-		t.Fatalf("active pane=%q", model.activePane)
+		t.Fatalf("active pane=%q, want room", model.activePane)
 	}
 	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	model = updated.(EnhancedModel)
 	if model.activePane != paneMain {
 		t.Fatalf("shift-tab active pane=%q", model.activePane)
 	}
-	if containsPane(model.focusablePanes(), paneHands) {
-		t.Fatalf("hands should not be focusable without overflow: %#v", model.focusablePanes())
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	model = updated.(EnhancedModel)
+	if model.activePane != paneInput {
+		t.Fatalf("second shift-tab active pane=%q, want input", model.activePane)
+	}
+	updated, _ = model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
+	updated, _ = model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
+	if !containsPane(model.focusablePanes(), paneHands) {
+		t.Fatalf("hands should be focusable when visible: %#v", model.focusablePanes())
+	}
+	updated, _ = model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
+	if model.activePane != paneHands {
+		t.Fatalf("third tab active pane=%q, want hands", model.activePane)
 	}
 	model.replacePane(paneHands, strings.Split(strings.Repeat("hand\n", model.handsViewport.Height()+2), "\n"))
 	if !containsPane(model.focusablePanes(), paneHands) {
@@ -200,25 +219,56 @@ func TestEnhancedModelRoutesPaneUpdatesFocusUnreadAndScroll(t *testing.T) {
 	}
 }
 
-func TestEnhancedModelFocusSkipsNonScrollingRoomAndSinglePaneScrollsGame(t *testing.T) {
+func TestEnhancedModelFocusIncludesVisiblePanesAndSinglePaneScrollsGame(t *testing.T) {
 	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
 	model.width = 80
 	model.height = 20
 	model.resizePanes()
 	model.replacePane(paneRoom, []string{"small room"})
 	model.appendPane(paneFamiliar, "familiar")
-	if containsPane(model.focusablePanes(), paneRoom) {
-		t.Fatalf("non-scrolling room should not be focusable: %#v", model.focusablePanes())
+	if !containsPane(model.focusablePanes(), paneInput) {
+		t.Fatalf("input should be focusable: %#v", model.focusablePanes())
+	}
+	if !containsPane(model.focusablePanes(), paneRoom) {
+		t.Fatalf("visible room should be focusable: %#v", model.focusablePanes())
 	}
 	updated, _ := model.Update(key(tea.KeyTab))
 	model = updated.(EnhancedModel)
-	if model.activePane != paneFamiliar {
-		t.Fatalf("active pane=%q, want familiar", model.activePane)
+	if model.activePane != paneMain {
+		t.Fatalf("active pane=%q, want main", model.activePane)
+	}
+	updated, _ = model.Update(key(tea.KeyTab))
+	model = updated.(EnhancedModel)
+	if model.activePane != paneRoom {
+		t.Fatalf("active pane=%q, want room", model.activePane)
 	}
 	updated, _ = model.Update(key(tea.KeyF2))
 	model = updated.(EnhancedModel)
-	if model.viewMode != ViewModeSingle || model.activePane != paneMain {
+	if model.viewMode != ViewModeSingle || model.activePane != paneInput {
 		t.Fatalf("single mode=%v active=%q", model.viewMode, model.activePane)
+	}
+}
+
+func TestEnhancedModelInputFocusKeepsCommandEditingKeys(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.width = 80
+	model.height = 20
+	model.resizePanes()
+	model.activePane = paneInput
+	model.input.Focus()
+	model.input.SetValue("look north")
+	model.input.SetCursor(4)
+
+	updated, _ := model.Update(key(tea.KeyEnd))
+	model = updated.(EnhancedModel)
+	if got := model.input.Position(); got != len("look north") {
+		t.Fatalf("end cursor=%d", got)
+	}
+
+	updated, _ = model.Update(key(tea.KeyHome))
+	model = updated.(EnhancedModel)
+	if got := model.input.Position(); got != 0 {
+		t.Fatalf("home cursor=%d", got)
 	}
 }
 
