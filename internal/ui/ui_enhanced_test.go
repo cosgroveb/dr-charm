@@ -272,6 +272,17 @@ func TestEnhancedModelInputFocusKeepsCommandEditingKeys(t *testing.T) {
 	}
 }
 
+func TestEnhancedModelInitialInputAcceptsTyping(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model.Init()
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = updated.(EnhancedModel)
+	if got := model.input.Value(); got != "n" {
+		t.Fatalf("input value=%q, want n", got)
+	}
+}
+
 func TestEnhancedModelPageUpDoesNotClearUnread(t *testing.T) {
 	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
 	model.width = 80

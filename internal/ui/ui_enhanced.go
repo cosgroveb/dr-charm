@@ -108,6 +108,7 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 	input.Prompt = "> "
 	input.CharLimit = 4096
 	input.SetWidth(70)
+	_ = input.Focus()
 	main := viewport.New(viewport.WithWidth(50), viewport.WithHeight(10))
 	main.SoftWrap = true
 	room := viewport.New(viewport.WithWidth(20), viewport.WithHeight(5))
