@@ -180,7 +180,6 @@ Configuration:
   Fallback: ~/.config/dr-charm/config.yaml
 
   A first run with no config creates a commented template and exits.
-  Production credential environment variables are not read.
 
 Maps:
   Learned map: $XDG_DATA_HOME/dr-charm/maps/Map00_Learned.xml

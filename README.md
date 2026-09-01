@@ -1,216 +1,81 @@
 # dr-charm
 
-`dr-charm` is a personal terminal client for DragonRealms. It authenticates
-through the Simutronics Game Entry service, connects to the DragonRealms game
-socket, decodes the StormFront XML stream, and renders a Bubble Tea interface.
+`dr-charm` is a terminal client for DragonRealms. Sign in with an
+existing DragonRealms account and character, then play in a full-screen
+terminal interface.
 
-The client is intentionally DragonRealms-specific. It is under active
-development and is built from source.
+The client supports DragonRealms only.
 
-## Build and run
+## Install
 
-Requirements:
+Published releases cover macOS, Debian 13 (Trixie), and Ubuntu 24.04 (Noble)
+on x86-64 and ARM64.
 
-- Go 1.25 or a Go installation that honors the Go 1.26.3 module toolchain directive
-- A DragonRealms account and character
+### macOS
 
-Build and run once. The first run creates an owner-only XDG configuration
-template and exits.
-
-```sh
-make build
-./dr-charm
-```
-
-Edit the file named in the error, fill in all three fields, then run again:
-
-```sh
-${EDITOR:-vi} "${XDG_CONFIG_HOME:-$HOME/.config}/dr-charm/config.yaml"
-./dr-charm
-```
-
-Use another configuration file with `--config` (or `-c`):
-
-```sh
-./dr-charm --config /path/to/config.yaml
-```
-
-Credential flags are not supported. This keeps passwords out of shell history
-and process listings.
-
-`--no-log` disables the session transcript for one run. Logging is enabled by
-default. `--version` prints the installed version without reading configuration
-or opening a game connection.
-
-Print the installed version without reading configuration or opening a game
-connection:
-
-```sh
-dr-charm --version
-```
-
-## Install a release
-
-Homebrew installs the prebuilt macOS binary from the personal tap:
+Install the Homebrew formula:
 
 ```sh
 brew install cosgroveb/tap/dr-charm
 ```
 
-GitHub Releases publish native packages for Debian Trixie and Ubuntu Noble on
-`amd64` and `arm64`. Download the package and its release checksum manifest,
-verify the manifest, then install the package for the local suite and
-architecture:
+### Debian and Ubuntu
+
+Download the `.deb` for your distribution and processor from the
+[latest release](https://github.com/cosgroveb/dr-charm/releases/latest). Choose
+`trixie` for Debian 13 or `noble` for Ubuntu 24.04. Package names end in
+`amd64.deb` for x86-64 and `arm64.deb` for ARM64.
+
+Install the downloaded file, replacing `PACKAGE.deb` with its filename:
 
 ```sh
-gh release download vX.Y.Z --repo cosgroveb/dr-charm --dir dr-charm-X.Y.Z
-(cd dr-charm-X.Y.Z && sha256sum -c SHA256SUMS)
-sudo apt install ./dr-charm-X.Y.Z/dr-charm_X.Y.Z-1.noble_arm64.deb
+sudo apt install ./PACKAGE.deb
 ```
 
-Replace the tag and package filename with the selected release, suite, and
-architecture. Releases contain no account configuration or credentials.
+### Build from source
 
-Maintainers publish a release by pushing a `vMAJOR.MINOR.PATCH` tag. The release
-workflow builds and verifies all six binaries, publishes the checksummed GitHub
-Release assets, then updates `cosgroveb/homebrew-tap`. Configure
-`HOMEBREW_TAP_TOKEN` as a fine-grained Actions secret with only
-`cosgroveb/homebrew-tap` contents-write access before pushing the first tag.
+Install Git, Make, and Go 1.26.3, then build the client:
 
-## Configuration
+```sh
+git clone https://github.com/cosgroveb/dr-charm.git
+cd dr-charm
+make build
+```
 
-All three fields are required:
+Use `./dr-charm` in place of `dr-charm` in the examples below when running the
+binary from the source directory.
+
+## First login
+
+Run the client once:
+
+```sh
+dr-charm
+```
+
+The first run creates a configuration file and prints its path. Open that file
+and fill in the three empty values:
 
 ```yaml
-account: your_account_name
-password: your_password
-character: your_character_name
+account: YOUR_ACCOUNT_NAME
+password: YOUR_PASSWORD
+character: YOUR_CHARACTER_NAME
 ```
 
-Configuration selection is:
+The client records game output and commands in a session log.
 
-1. The path passed to `--config`, when present. `~/` is expanded for this path.
-2. Otherwise, `$XDG_CONFIG_HOME/dr-charm/config.yaml`, or
-   `~/.config/dr-charm/config.yaml` when `XDG_CONFIG_HOME` is unset.
+Run `dr-charm` again. Wait for the status bar to show `READY`, type `look`, and
+press Enter. Press F5 to switch the Room pane to the learned map. Press F1 for
+the controls and Ctrl-C to quit.
 
-The default file is created as a 0600 commented template in a 0700 directory.
-Existing configuration file and directory modes are accepted. Invalid or
-unreadable files stop startup. `DR_ACCOUNT`, `DR_PASSWORD`, and
-`DR_CHARACTER` are not production configuration inputs.
+## Documentation
 
-An explicit file error stops startup. An unreadable or invalid default file
-also stops startup instead of falling through to a later file.
-
-## Interface
-
-The default view has game, room, hands, and familiar panes. The status bar
-shows health, mana, fatigue, concentration, spirit, posture, and learned-map
-position. Common command aliases such as `l` for `look` and `n` for `north` are
-expanded before sending.
-
-Keys:
-
-- `Enter`: send command
-- `Up` and `Down`: command history
-- `Page Up`, `Page Down`, `Home`, and `End`: scroll the active pane
-  (`Home` and `End` edit the command line when Input is focused)
-- `Mouse wheel`: scroll the active pane
-- `Tab` and `Shift+Tab`: cycle Input and visible panes
-- `Ctrl+G`: open the configured command editor
-- `F1`: help
-- `F2`: switch between multi-pane and single-pane views
-- `F3`: choose a theme
-- `F4`: toggle session logging
-- `F5`: toggle the right-side slot between Room and Map
-- `Ctrl+C`: quit
-
-The connection and logging state are shown in the status bar. A disconnect is
-shown in the interface while the session closes or reconnects. Output remains
-available to scroll while the connection state changes.
-
-Logs are written under `$XDG_STATE_HOME/dr-charm/logs/` (or
-`~/.local/state/dr-charm/logs`). They contain game output and player commands,
-so protect them like other account data. Logging is enabled by default and can
-be disabled with `--no-log` or toggled with `F4`. New log directories are 0700
-and log files are 0600. Closed matching files are retained up to 30 files and
-100 MiB as a soft limit.
-
-The mapper learns by default. The first seen room starts at `(0,0,0)`, and a
-later login in unrelated geography starts a disconnected cluster instead of
-overlapping the first one. Learned maps are written as Genie-compatible XML at
-`$XDG_DATA_HOME/dr-charm/maps/Map00_Learned.xml` (or
-`~/.local/share/dr-charm/maps/Map00_Learned.xml`). The first mapper slice has no
-community map updater, pathfinder, route command, map editor, or learning
-toggle.
-
-Custom themes are JSON files under `$XDG_CONFIG_HOME/dr-charm/themes/` (or
-`~/.config/dr-charm/themes`). Each file contains
-one flat object:
-
-```json
-{
-  "name": "green-screen",
-  "foreground": "46",
-  "border": "22",
-  "title_bar": "46",
-  "status_bar": "0",
-  "status_bar_bg": "46",
-  "border_type": "double",
-  "padding": 1
-}
-```
-
-Set `name` to a nonempty string. The loader trims surrounding whitespace. The
-other keys are optional. `border_type` accepts `normal`, `hidden`, `thick`,
-`double`, or `rounded`. An empty or unknown `border_type` uses the rounded
-border. Files with unknown keys, nested legacy objects, or additional JSON
-values are reported as theme warnings and skipped.
-
-The loader places custom themes after `default`, `dark`, and `high-contrast` in
-lexical filename order. When two files use the same theme name, the value from
-the later filename replaces the earlier value in the same position. A custom
-file can replace a built-in theme without moving its position.
-
-## Architecture
-
-`internal/dragonrealms.Session` owns authentication, the game connection,
-command serialization, reconnect behavior, XML decoding, and canonical game
-state. It publishes detached `Update` values containing a semantic `Snapshot`
-and display events. `internal/dragonrealms/presenter` translates those updates
-into `internal/presentation` values for the UI, feeds the learned mapper, and
-publishes pane-ready map text. The UI does not read sockets, parse XML, or learn
-rooms.
-
-`cmd/dr-charm` only loads configuration, creates the session and UI, and runs
-Bubble Tea. Aliases, highlighting, themes, and logging remain UI concerns.
-
-## Development
-
-Run local checks:
-
-```sh
-gofmt -l .
-go vet ./...
-go test -race -shuffle=on ./...
-go build -o /tmp/dr-charm ./cmd/dr-charm
-```
-
-Release-only archive checks run separately and do not require a game account:
-
-```sh
-make test-release
-```
-
-The protocol integration test uses loopback TCP servers and runs with the normal
-suite. The live test is opt-in and uses real DragonRealms services. It never
-falls back to a fake or skips when selected:
-
-```sh
-DR_E2E_CONFIG=/path/to/config.yaml \
-  go test -tags=e2e ./cmd/dr-charm \
-  -run TestDragonRealmsEndToEnd -count=1 -timeout=60s
-```
+- [Getting started](docs/getting-started.md) walks through the first session.
+- [Configuration reference](docs/configuration.md) covers paths, logging,
+  themes, and the learned map.
+- `dr-charm --help` lists command-line options. Debian and Ubuntu packages also
+  install the `dr-charm(1)` man page.
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE)

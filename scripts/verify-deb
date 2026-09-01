@@ -42,9 +42,13 @@ usr/bin/dr-charm
 usr/share
 usr/share/doc
 usr/share/doc/dr-charm
+usr/share/doc/dr-charm/LICENSE
 usr/share/doc/dr-charm/README.md
 usr/share/doc/dr-charm/changelog.Debian.gz
 usr/share/doc/dr-charm/copyright
+usr/share/doc/dr-charm/docs
+usr/share/doc/dr-charm/docs/configuration.md
+usr/share/doc/dr-charm/docs/getting-started.md
 usr/share/lintian
 usr/share/lintian/overrides
 usr/share/lintian/overrides/dr-charm

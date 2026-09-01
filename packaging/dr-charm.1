@@ -1,10 +1,9 @@
-.TH DR-CHARM 1 "2026-08-30" "dr-charm" "User Commands"
+.TH DR-CHARM 1 "2026-09-01" "dr-charm" "User Commands"
 .SH NAME
 dr-charm \- DragonRealms terminal client
 .SH SYNOPSIS
 .B dr-charm
 .RB [ -c | --config " " \fIPATH\fR ]
-.RB [ -n | --no-log ]
 .br
 .B dr-charm
 .RB [ -V | --version ]
@@ -13,26 +12,33 @@ dr-charm \- DragonRealms terminal client
 .RB [ -h | --help ]
 .SH DESCRIPTION
 .B dr-charm
-authenticates to DragonRealms and renders a terminal interface.
-The status bar shows connection and logging state. A disconnect remains visible
-while the session closes or reconnects, and pane output can be scrolled.
+signs in to DragonRealms with an existing account and character, then renders a
+full-screen terminal interface.
+The status bar shows connection and logging state. Connection state remains
+visible while the session closes or reconnects. You can scroll any output pane.
 .SH INTERFACE
 .TP
 .B Enter
 Send the command line.
 .TP
+.B Up, Down
+Recall commands from the current session.
+.TP
 .B Ctrl-G
 Open the command line in \fB$VISUAL\fR or \fB$EDITOR\fR.
 .TP
 .B Page Up, Page Down, Home, End
-Scroll the focused pane. When Input is focused, Home and End move within the
-command line.
+Scroll the focused output pane. When Input is focused, Home and End move within
+the command line.
 .TP
 .B Tab
 Cycle Input and visible panes.
 .TP
 .B Shift-Tab
 Cycle Input and visible panes in reverse.
+.TP
+.B Mouse wheel
+Scroll the focused output pane.
 .TP
 .B F1
 Show help.
@@ -47,7 +53,13 @@ Select a theme.
 Toggle session logging.
 .TP
 .B F5
-Toggle the right-side slot between Room and Map.
+Toggle the Room pane between room details and the learned map.
+.TP
+.B Escape
+Leave help or the theme selector.
+.TP
+.B Ctrl-C
+Quit.
 .SH OPTIONS
 .TP
 .BI --config " PATH"
@@ -55,12 +67,6 @@ Read credentials from PATH instead of the XDG default configuration file.
 .TP
 .BI -c " PATH"
 Short form of \fB--config\fR.
-.TP
-.B --no-log
-Disable the session transcript for this run. Logging is enabled by default.
-.TP
-.B -n
-Short form of \fB--no-log\fR.
 .TP
 .B --version
 Print the installed version without reading configuration or opening a network
@@ -74,11 +80,23 @@ Print help to standard output.
 .TP
 .B -h
 Short form of \fB--help\fR.
+.SH ALIASES
+\fBdr-charm\fR expands the first word of a command when it matches a built-in
+alias. It sends other commands unchanged.
+.TP
+.B n, s, e, w, ne, nw, se, sw, u, d, o
+Movement aliases for north, south, east, west, diagonals, up, down, and out.
+.TP
+.B l, i, sta, kne, sit, ly, hi, sn, sea
+Aliases for look, inventory, stand, kneel, sit, lie, hide, sneak, and search.
+.TP
+.B att, ki, sk, arr, loot
+Aliases for attack, kill, skin, arrange, and \fBloot all\fR.
 .SH FILES
 .TP
 .I $XDG_CONFIG_HOME/dr-charm/config.yaml
 Default configuration file containing account credentials. A first run with no
-configuration creates a commented template with owner-only permissions and exits.
+configuration writes a commented template with owner-only permissions, then exits.
 When \fBXDG_CONFIG_HOME\fR is unset, use \fI~/.config/dr-charm/config.yaml\fR.
 .TP
 .I $XDG_CONFIG_HOME/dr-charm/themes
@@ -88,12 +106,32 @@ Custom theme JSON files. When \fBXDG_CONFIG_HOME\fR is unset, use
 .I $XDG_STATE_HOME/dr-charm/logs
 Session transcripts. When \fBXDG_STATE_HOME\fR is unset, use
 \fI~/.local/state/dr-charm/logs\fR. New directories are owner-only and
-closed logs are retained up to 30 files and 100 MiB as a soft limit.
+\fBdr-charm\fR retains up to 30 closed logs and 100 MiB as soft limits.
 .TP
 .I $XDG_DATA_HOME/dr-charm/maps/Map00_Learned.xml
 Learned Genie-compatible map XML. When \fBXDG_DATA_HOME\fR is unset, use
 \fI~/.local/share/dr-charm/maps/Map00_Learned.xml\fR.
+.SH ENVIRONMENT
+.TP
+.B VISUAL
+Command used by Ctrl-G. Takes precedence over \fBEDITOR\fR.
+.TP
+.B EDITOR
+Command used by Ctrl-G when \fBVISUAL\fR is unset.
+.TP
+.B XDG_CONFIG_HOME
+Absolute base directory for the credential file and custom themes.
+.TP
+.B XDG_STATE_HOME
+Absolute base directory for session transcripts.
+.TP
+.B XDG_DATA_HOME
+Absolute base directory for the learned map.
 .SH SECURITY
 Configuration files and logs contain account data. New configuration files and
-logs are readable only by their owner. Existing configuration modes are accepted.
-The production binary does not read credential environment variables.
+logs are readable only by their owner. \fBdr-charm\fR accepts existing
+configuration modes.
+.SH SEE ALSO
+.UR https://github.com/cosgroveb/dr-charm
+Project README and player documentation
+.UE

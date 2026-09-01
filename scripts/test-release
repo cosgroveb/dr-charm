@@ -12,6 +12,9 @@ for arch in amd64 arm64; do
   expected="dr-charm_${version}_darwin_${arch}/
 dr-charm_${version}_darwin_${arch}/LICENSE
 dr-charm_${version}_darwin_${arch}/README.md
+dr-charm_${version}_darwin_${arch}/docs/
+dr-charm_${version}_darwin_${arch}/docs/configuration.md
+dr-charm_${version}_darwin_${arch}/docs/getting-started.md
 dr-charm_${version}_darwin_${arch}/dr-charm"
   actual="$(tar -tzf "$archive" | LC_ALL=C sort)"
   if [ "$actual" != "$expected" ]; then

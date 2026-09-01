@@ -22,7 +22,7 @@ dist_dir="${DIST_DIR:-$root_dir/dist}"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/dr-charm-archive.XXXXXX")"
 trap 'rm -rf -- "$work_dir"' EXIT
 
-mkdir -p "$dist_dir" "$work_dir/dr-charm_${version}_darwin_${arch}"
+mkdir -p "$dist_dir" "$work_dir/dr-charm_${version}_darwin_${arch}/docs"
 binary="$work_dir/dr-charm_${version}_darwin_${arch}/dr-charm"
 
 (
@@ -34,6 +34,10 @@ binary="$work_dir/dr-charm_${version}_darwin_${arch}/dr-charm"
 )
 install -m 0644 "$root_dir/LICENSE" "$work_dir/dr-charm_${version}_darwin_${arch}/LICENSE"
 install -m 0644 "$root_dir/README.md" "$work_dir/dr-charm_${version}_darwin_${arch}/README.md"
+install -m 0644 "$root_dir/docs/getting-started.md" \
+  "$work_dir/dr-charm_${version}_darwin_${arch}/docs/getting-started.md"
+install -m 0644 "$root_dir/docs/configuration.md" \
+  "$work_dir/dr-charm_${version}_darwin_${arch}/docs/configuration.md"
 
 archive="$dist_dir/dr-charm_${version}_darwin_${arch}.tar.gz"
 tar -C "$work_dir" -czf "$archive" "dr-charm_${version}_darwin_${arch}"

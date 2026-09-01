@@ -9,6 +9,19 @@ and renders a Bubble Tea TUI.
 The client is DragonRealms-specific. Do not add generic Simutronics support,
 compatibility layers for the removed prototype, or features for other clients.
 
+## Documentation
+
+`README.md` and `docs/` are for people who want to play DragonRealms. Keep the
+README as the project entry point, `docs/getting-started.md` as the beginner
+tutorial, and `docs/configuration.md` as reference. `packaging/dr-charm.1` is
+the installed command reference.
+
+Do not put architecture, implementation history, development commands, or
+release procedure in player documentation. Keep maintainer material here.
+
+Keep `--no-log` in command help only. Do not document it in `README.md`,
+`docs/`, or the man page.
+
 ## Safety boundaries
 
 - Do not put real DragonRealms credentials in command arguments, tests, logs,
@@ -32,7 +45,7 @@ compatibility layers for the removed prototype, or features for other clients.
 3. The private decoder converts arbitrary network chunks into protocol events.
    The private reducer is the only owner of canonical game state.
 4. Session publishes detached `dragonrealms.Update` values. Public `Snapshot`
-   fields are semantic UI state; raw component dictionaries stay private.
+   fields are semantic UI state. Raw component dictionaries stay private.
 5. `internal/dragonrealms/presenter` translates Session updates into the
    protocol-neutral `internal/presentation` model. `internal/ui.EnhancedModel`
    consumes presentation updates and sends commands through that client. The UI
@@ -56,11 +69,11 @@ to consumers.
    `~/.config/dr-charm/config.yaml`.
 3. Required-field validation.
 
-The default template is created in a 0700 directory with mode 0600. Existing
-file and directory modes are accepted. Existing unreadable or invalid files are
-errors. Production does not read `DR_ACCOUNT`, `DR_PASSWORD`, or `DR_CHARACTER`.
-The tagged test-only E2E path may use `DR_E2E_CONFIG` or the complete credential
-tuple.
+`config.LoadResolved` creates the default template in a 0700 directory with
+mode 0600. It accepts existing file and directory modes. Existing unreadable or
+invalid files are errors. `config.LoadResolved` does not read `DR_ACCOUNT`,
+`DR_PASSWORD`, or `DR_CHARACTER`. The tagged test-only E2E path may use
+`DR_E2E_CONFIG` or the complete credential tuple.
 
 `$XDG_CONFIG_HOME/dr-charm/themes` contains custom themes. Session logs use
 `$XDG_STATE_HOME/dr-charm/logs`, with `~/.config` and `~/.local/state` fallbacks.
@@ -86,7 +99,7 @@ account.
 The tagged E2E test is the only live test. Selecting it requires either
 `DR_E2E_CONFIG` or the complete `DR_ACCOUNT`, `DR_PASSWORD`, and `DR_CHARACTER`
 tuple. Missing or placeholder credentials fail setup. This environment access
-is test-only. The test must not skip, substitute a fake, or send commands
+is test-only. Do not make the test skip, substitute a fake, or send commands
 beyond automatic `look` and `flags`.
 
 Use a temporary output path so a review build does not replace the running
@@ -107,6 +120,20 @@ DR_E2E_CONFIG=/path/to/config.yaml \
   go test -tags=e2e ./cmd/dr-charm \
   -run TestDragonRealmsEndToEnd -count=1 -timeout=60s
 ```
+
+## Build and release
+
+`make build` writes `./dr-charm`. Use the temporary output path above for
+review builds so a check does not replace a running client.
+
+`make test-release` builds and checks the release-only macOS archives. Debian
+package builds run in their matching Debian 13 or Ubuntu 24.04 container.
+
+Push a `vMAJOR.MINOR.PATCH` tag to publish four Debian packages (Trixie and
+Noble on amd64 and arm64) and two macOS archives (amd64 and arm64). The release
+workflow verifies the assets, writes `SHA256SUMS`, and updates the
+`cosgroveb/homebrew-tap` formula. `HOMEBREW_TAP_TOKEN` must grant contents-write
+access only to `cosgroveb/homebrew-tap`.
 
 ## Change rules
 
