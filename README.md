@@ -70,19 +70,17 @@ the controls and Ctrl-C to quit.
 
 ## Optional auto mode
 
-Auto mode can reply in the client or choose one game command after a
-DragonRealms prompt or your whisper. Configure a trusted OpenAI-compatible
-`/responses` endpoint as described in the
-[configuration reference](docs/configuration.md#auto-mode), then press F6.
-Turning auto mode on does not contact the endpoint. A game prompt or whisper
-wakes the agent. Each request includes recent text from the Game and Familiar
-panes. While auto mode is on, text you enter becomes a whisper instead of a
-command sent to DragonRealms. Press F6 again to stop auto mode and cancel any
-request in progress.
+Auto mode lets an LLM reply in the client or choose one game command after a
+DragonRealms prompt or your whisper. It starts off and requires an
+OpenAI-compatible Responses endpoint.
+
+[Set up and use auto mode](docs/auto-mode.md), then press F6 after the status
+bar shows `READY`.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md) walks through the first session.
+- [How to use auto mode](docs/auto-mode.md) covers agent setup and controls.
 - [Configuration reference](docs/configuration.md) covers paths, logging,
   themes, the learned map, and optional auto mode.
 - `dr-charm --help` lists command-line options. Debian and Ubuntu packages also

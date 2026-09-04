@@ -50,6 +50,8 @@ install -m 0644 "$root_dir/README.md" "$package_root/usr/share/doc/dr-charm/READ
 install -m 0644 "$root_dir/LICENSE" "$package_root/usr/share/doc/dr-charm/LICENSE"
 install -m 0644 "$root_dir/docs/getting-started.md" \
   "$package_root/usr/share/doc/dr-charm/docs/getting-started.md"
+install -m 0644 "$root_dir/docs/auto-mode.md" \
+  "$package_root/usr/share/doc/dr-charm/docs/auto-mode.md"
 install -m 0644 "$root_dir/docs/configuration.md" \
   "$package_root/usr/share/doc/dr-charm/docs/configuration.md"
 install -m 0644 "$root_dir/packaging/copyright" "$package_root/usr/share/doc/dr-charm/copyright"

@@ -13,8 +13,8 @@ features for other clients.
 
 `README.md` and `docs/` are for people who want to play DragonRealms. Keep the
 README as the project entry point, `docs/getting-started.md` as the beginner
-tutorial, and `docs/configuration.md` as reference. `packaging/dr-charm.1` is
-the installed command reference.
+tutorial, `docs/auto-mode.md` as the task guide, and `docs/configuration.md` as
+reference. `packaging/dr-charm.1` is the installed command reference.
 
 Keep player documentation focused on installing, configuring, and using the
 client. Keep maintainer material here.

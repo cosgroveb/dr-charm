@@ -36,6 +36,8 @@ install -m 0644 "$root_dir/LICENSE" "$work_dir/dr-charm_${version}_darwin_${arch
 install -m 0644 "$root_dir/README.md" "$work_dir/dr-charm_${version}_darwin_${arch}/README.md"
 install -m 0644 "$root_dir/docs/getting-started.md" \
   "$work_dir/dr-charm_${version}_darwin_${arch}/docs/getting-started.md"
+install -m 0644 "$root_dir/docs/auto-mode.md" \
+  "$work_dir/dr-charm_${version}_darwin_${arch}/docs/auto-mode.md"
 install -m 0644 "$root_dir/docs/configuration.md" \
   "$work_dir/dr-charm_${version}_darwin_${arch}/docs/configuration.md"
 

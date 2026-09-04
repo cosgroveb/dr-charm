@@ -36,7 +36,8 @@ modes of existing files and directories unchanged.
 
 ## Auto mode
 
-Auto mode is optional. Add this block to use it:
+The optional `agent` block connects auto mode to an OpenAI-compatible Responses
+endpoint:
 
 ```yaml
 agent:
@@ -58,26 +59,45 @@ agent:
 the block. `dr-charm` posts only to the exact URL in `agent.endpoint`. The URL
 cannot contain embedded credentials or a fragment.
 
-Use an endpoint you trust. `dr-charm` includes recent text from the Game and
-Familiar panes in every request. Action requests also include fixed
-instructions, a short DragonRealms command reference, the configured agent
-character, earlier player-agent conversation and command choices, and new
-whispers. Summary requests send older conversation to the model for
-condensation. `dr-charm` never sends your DragonRealms account or password.
+The endpoint must support streaming OpenAI Responses requests and function
+tools. Chat Completions endpoints are not supported. The
+[auto mode guide](auto-mode.md) covers setup and controls.
 
-Auto mode starts off. Press F6 to turn it on. F6 does not make a request. A new
-DragonRealms prompt or a whisper wakes the agent, and the agent can reply or
-choose one command. While auto mode is on, Enter sends the Input pane text to
-the agent as a whisper. It does not send that text to DragonRealms.
+`dr-charm` does not set a reasoning effort or service tier. Those values come
+from endpoint defaults.
 
-The status bar shows `AGENT off`, `AGENT idle`, `AGENT thinking`, or
-`AGENT error`. After an error, the agent waits for the next prompt or whisper.
+### Request contents
+
+Every model request sends recent text from the Game and Familiar panes to the
+configured endpoint. Action requests also include:
+
+- fixed instructions and a short DragonRealms command reference
+- the configured `agent.character` instructions
+- earlier player-agent conversation and command choices
+- new whispers
+- one `send_command` function tool
+
+Summary requests include older conversation and recent game text. `dr-charm`
+does not include your DragonRealms account or password. A proxy may add its own
+instructions before forwarding the request.
+
+### Session behavior
+
+| Status | Meaning |
+|---|---|
+| `AGENT off` | Auto mode is available and disabled. |
+| `AGENT idle` | Auto mode is waiting for a new game prompt or whisper. |
+| `AGENT thinking` | A model request is in progress. |
+| `AGENT error` | The last request failed. The next prompt or whisper tries again. |
+
+Auto mode starts off. F6 toggles it without making a request. When auto mode is
+on, Enter sends the Input pane text to the agent as a whisper instead of sending
+it to DragonRealms. The agent can reply or choose one command.
+
 A new prompt or whisper while the agent is thinking cancels the current request
-and replaces it after the canceled request returns. Pressing F6 while a request
-is in progress cancels it. A lost game connection, quitting the client, or
-closing the session also cancels the request. Auto mode stays selected across a
-reconnect, but it waits for a new prompt or whisper after the connection
-returns.
+and replaces it after cancellation finishes. F6, a lost connection, quitting,
+or closing the session also cancels a request. Auto mode stays selected across
+a reconnect, then waits for a new prompt or whisper.
 
 `dr-charm` keeps the most recent 16 KiB of Game and Familiar text for the agent.
 After agent history grows past 32 KiB, `dr-charm` asks the model to condense it

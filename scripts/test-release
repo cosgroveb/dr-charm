@@ -13,6 +13,7 @@ for arch in amd64 arm64; do
 dr-charm_${version}_darwin_${arch}/LICENSE
 dr-charm_${version}_darwin_${arch}/README.md
 dr-charm_${version}_darwin_${arch}/docs/
+dr-charm_${version}_darwin_${arch}/docs/auto-mode.md
 dr-charm_${version}_darwin_${arch}/docs/configuration.md
 dr-charm_${version}_darwin_${arch}/docs/getting-started.md
 dr-charm_${version}_darwin_${arch}/dr-charm"

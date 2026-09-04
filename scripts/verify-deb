@@ -47,6 +47,7 @@ usr/share/doc/dr-charm/README.md
 usr/share/doc/dr-charm/changelog.Debian.gz
 usr/share/doc/dr-charm/copyright
 usr/share/doc/dr-charm/docs
+usr/share/doc/dr-charm/docs/auto-mode.md
 usr/share/doc/dr-charm/docs/configuration.md
 usr/share/doc/dr-charm/docs/getting-started.md
 usr/share/lintian

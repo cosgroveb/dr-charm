@@ -103,17 +103,24 @@ It starts off. Press F6 to enable it. Once the status bar shows \fBREADY\fR, a
 new DragonRealms prompt or a whisper wakes the agent. The agent may reply in
 the client or choose one game command.
 .PP
+Whispers and replies use bold text with reverse-video \fB[whisper]\fR and
+\fB[agent]\fR labels. Agent commands start with \fB[agent] >\fR.
+.PP
 The block accepts \fBendpoint\fR, \fBapi_key\fR, \fBmodel\fR, and
 \fBcharacter\fR. The endpoint is the complete HTTP or HTTPS URL and its path
 must end in \fB/responses\fR. The API key is optional. The other three values
 are required when the block is present. The URL cannot contain embedded
 credentials or a fragment.
 .PP
-Use an endpoint you trust. Every request includes recent Game and Familiar
-text. Requests may also include the configured agent character, earlier agent
-conversation, and whispers. When that conversation grows long, \fBdr-charm\fR
-asks the endpoint to summarize its older parts. It does not add your
-DragonRealms account or password to requests.
+The endpoint must support streaming OpenAI Responses requests and function
+tools. Chat Completions endpoints are not supported. \fBdr-charm\fR does not
+set a reasoning effort or service tier.
+.PP
+Every request sends recent Game and Familiar text to the configured endpoint.
+Requests may also include the configured agent character, earlier agent
+conversation, and whispers. Use an endpoint you trust. When that conversation
+grows long, \fBdr-charm\fR asks the endpoint to summarize its older parts. It
+does not add your DragonRealms account or password to requests.
 .PP
 The status bar shows \fBAGENT off\fR, \fBAGENT idle\fR,
 \fBAGENT thinking\fR, or \fBAGENT error\fR. F6 cancels a request when turning
@@ -162,6 +169,10 @@ character and gameplay data. New configuration files and logs are readable
 only by their owner. \fBdr-charm\fR leaves permissions on existing
 configuration files unchanged.
 .SH SEE ALSO
+.UR https://github.com/cosgroveb/dr-charm/blob/main/docs/auto-mode.md
+Auto mode guide
+.UE
+.PP
 .UR https://github.com/cosgroveb/dr-charm
 Project README and player documentation
 .UE
