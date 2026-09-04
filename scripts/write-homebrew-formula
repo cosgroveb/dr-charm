@@ -26,7 +26,6 @@ cat >"$output" <<EOF
 class DrCharm < Formula
   desc "DragonRealms terminal client"
   homepage "https://github.com/cosgroveb/dr-charm"
-  version "$version"
   license "Apache-2.0"
 
   on_macos do
