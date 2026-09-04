@@ -119,7 +119,6 @@ gofmt -l .
 go vet ./...
 go test -race -shuffle=on ./...
 go build -o /tmp/dr-charm ./cmd/dr-charm
-make agent-sloc app-sloc
 ```
 
 Run the live test only with explicit approval and a non-placeholder credential
@@ -149,8 +148,6 @@ access only to `cosgroveb/homebrew-tap`.
 
 - Read surrounding code before changing package boundaries.
 - Keep one reason per change and avoid unrelated cleanup.
-- Keep non-test Go under `internal/agent` at or below 250 SLOC and non-test Go
-  under `cmd` and `internal` at or below 5,900 SLOC.
 - Use unexported dependency injection only for package tests. The UI may keep
   its small consumer-owned session interface.
 - Every session goroutine needs a cancellation and join path. Every update send
