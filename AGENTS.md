@@ -2,12 +2,12 @@
 
 ## Project
 
-`dr-charm` is a personal Go terminal client for DragonRealms. It authenticates
+`dr-charm` is a Go terminal client for DragonRealms. It authenticates
 through `eaccess.play.net`, connects to the game socket, decodes StormFront XML,
 and renders a Bubble Tea TUI.
 
-The client is DragonRealms-specific. Do not add generic Simutronics support,
-compatibility layers for the removed prototype, or features for other clients.
+The client is DragonRealms-specific. Do not add generic Simutronics support or
+features for other clients.
 
 ## Documentation
 
@@ -16,8 +16,8 @@ README as the project entry point, `docs/getting-started.md` as the beginner
 tutorial, and `docs/configuration.md` as reference. `packaging/dr-charm.1` is
 the installed command reference.
 
-Do not put architecture, implementation history, development commands, or
-release procedure in player documentation. Keep maintainer material here.
+Keep player documentation focused on installing, configuring, and using the
+client. Keep maintainer material here.
 
 Keep `--no-log` in command help only. Do not document it in `README.md`,
 `docs/`, or the man page.
@@ -55,6 +55,10 @@ Keep `--no-log` in command help only. Do not document it in `README.md`,
    matching, graph edges, persistence, and terminal map rendering. The presenter
    feeds it sanitized room snapshots and successful commands. The UI only
    toggles between the Room projection and pane-ready map text.
+7. `internal/agent` builds `/responses` requests, parses the strict
+   `send_command` result, and returns replacement history. The UI owns accepted
+   history, prompt and whisper wakeups, recent sanitized game context,
+   cancellation, and command dispatch through the presenter and Session.
 
 Do not introduce a second socket reader, socket writer, protocol parser, or
 mutable game-state owner. `Snapshot.Connection` is the connection truth exposed
@@ -80,6 +84,11 @@ invalid files are errors. `config.LoadResolved` does not read `DR_ACCOUNT`,
 New log directories are 0700 and new log files are 0600.
 Learned maps use `$XDG_DATA_HOME/dr-charm/maps`, with
 `~/.local/share/dr-charm/maps` as the fallback.
+
+The optional `agent` block contains a complete `/responses` endpoint, optional
+API key, model, and required agent character instructions. `internal/agent`
+supports OpenAI-compatible `/responses` endpoints only. Do not pass
+DragonRealms credentials into it.
 
 ## Terminal text and presentation
 
@@ -110,6 +119,7 @@ gofmt -l .
 go vet ./...
 go test -race -shuffle=on ./...
 go build -o /tmp/dr-charm ./cmd/dr-charm
+make agent-sloc app-sloc
 ```
 
 Run the live test only with explicit approval and a non-placeholder credential
@@ -139,14 +149,9 @@ access only to `cosgroveb/homebrew-tap`.
 
 - Read surrounding code before changing package boundaries.
 - Keep one reason per change and avoid unrelated cleanup.
-- Preserve the single Session boundary instead of adding adapters or producer
-  interfaces.
-- Keep map learning in `internal/mapper`. Do not let the UI mutate map state or
-  persist map files.
+- Keep non-test Go under `internal/agent` at or below 250 SLOC and non-test Go
+  under `cmd` and `internal` at or below 5,900 SLOC.
 - Use unexported dependency injection only for package tests. The UI may keep
   its small consumer-owned session interface.
 - Every session goroutine needs a cancellation and join path. Every update send
   must unblock on session cancellation.
-- Never expose credentials, auth payloads, game keys, raw responses, or raw
-  component maps through errors, diagnostics, or public types.
-- Run `gofmt` on changed Go files, repeat focused tests, then run the full suite.

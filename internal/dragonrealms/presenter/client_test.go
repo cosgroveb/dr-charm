@@ -13,6 +13,7 @@ import (
 func TestClientTranslatesSessionUpdate(t *testing.T) {
 	source := &fakeSource{updates: make(chan dragonrealms.Update, 1)}
 	source.updates <- dragonrealms.Update{
+		Prompted: true,
 		Snapshot: dragonrealms.Snapshot{
 			Character:  "Hero",
 			Connection: dragonrealms.ConnectionReady,
@@ -38,7 +39,7 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 	if !ok {
 		t.Fatal("Next closed unexpectedly")
 	}
-	if got.Connection != presentation.Ready || got.Title != "[Room]" || got.Prompt != ">" || got.Character != "Hero" {
+	if got.Connection != presentation.Ready || got.Title != "[Room]" || got.Prompt != ">" || got.Character != "Hero" || !got.Prompted {
 		t.Fatalf("top-level fields = %#v", got)
 	}
 	if want := []presentation.StatusField{
@@ -72,6 +73,10 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 	}
 	if len(got.Notices) != 1 || got.Notices[0].Text != "diagnostic" {
 		t.Fatalf("notices = %#v", got.Notices)
+	}
+	retained := Translate(dragonrealms.Update{Snapshot: dragonrealms.Snapshot{Prompt: ">"}})
+	if retained.Prompt != ">" || retained.Prompted {
+		t.Fatalf("retained prompt=%q prompted=%v", retained.Prompt, retained.Prompted)
 	}
 }
 

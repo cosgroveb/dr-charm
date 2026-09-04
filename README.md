@@ -8,8 +8,8 @@ The client supports DragonRealms only.
 
 ## Install
 
-Published releases cover macOS, Debian 13 (Trixie), and Ubuntu 24.04 (Noble)
-on x86-64 and ARM64.
+Install a release on macOS, Debian 13 (Trixie), or Ubuntu 24.04 (Noble).
+Releases include x86-64 and ARM64 builds.
 
 ### macOS
 
@@ -68,11 +68,23 @@ Run `dr-charm` again. Wait for the status bar to show `READY`, type `look`, and
 press Enter. Press F5 to switch the Room pane to the learned map. Press F1 for
 the controls and Ctrl-C to quit.
 
+## Optional auto mode
+
+Auto mode can reply in the client or choose one game command after a
+DragonRealms prompt or your whisper. Configure a trusted OpenAI-compatible
+`/responses` endpoint as described in the
+[configuration reference](docs/configuration.md#auto-mode), then press F6.
+Turning auto mode on does not contact the endpoint. A game prompt or whisper
+wakes the agent. Each request includes recent text from the Game and Familiar
+panes. While auto mode is on, text you enter becomes a whisper instead of a
+command sent to DragonRealms. Press F6 again to stop auto mode and cancel any
+request in progress.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md) walks through the first session.
 - [Configuration reference](docs/configuration.md) covers paths, logging,
-  themes, and the learned map.
+  themes, the learned map, and optional auto mode.
 - `dr-charm --help` lists command-line options. Debian and Ubuntu packages also
   install the `dr-charm(1)` man page.
 

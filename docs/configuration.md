@@ -34,6 +34,57 @@ When the default file does not exist, `dr-charm` creates its directory with
 mode 0700, creates the file with mode 0600, and exits. `dr-charm` leaves the
 modes of existing files and directories unchanged.
 
+## Auto mode
+
+Auto mode is optional. Add this block to use it:
+
+```yaml
+agent:
+  endpoint: http://localhost:4000/v1/responses
+  api_key: LOCAL_API_KEY
+  model: MODEL_NAME
+  character: |
+    Describe how the agent should play this character.
+```
+
+| Key | Value |
+|---|---|
+| `agent.endpoint` | Complete HTTP or HTTPS Responses URL. Its path must end in `/responses`. |
+| `agent.api_key` | Optional bearer token. Leave it empty when your endpoint does not require one. |
+| `agent.model` | Model name accepted by the endpoint. |
+| `agent.character` | Instructions that describe how the agent should play this character. |
+
+`agent.endpoint`, `agent.model`, and `agent.character` are required when you add
+the block. `dr-charm` posts only to the exact URL in `agent.endpoint`. The URL
+cannot contain embedded credentials or a fragment.
+
+Use an endpoint you trust. `dr-charm` includes recent text from the Game and
+Familiar panes in every request. Action requests also include fixed
+instructions, a short DragonRealms command reference, the configured agent
+character, earlier player-agent conversation and command choices, and new
+whispers. Summary requests send older conversation to the model for
+condensation. `dr-charm` never sends your DragonRealms account or password.
+
+Auto mode starts off. Press F6 to turn it on. F6 does not make a request. A new
+DragonRealms prompt or a whisper wakes the agent, and the agent can reply or
+choose one command. While auto mode is on, Enter sends the Input pane text to
+the agent as a whisper. It does not send that text to DragonRealms.
+
+The status bar shows `AGENT off`, `AGENT idle`, `AGENT thinking`, or
+`AGENT error`. After an error, the agent waits for the next prompt or whisper.
+A new prompt or whisper while the agent is thinking cancels the current request
+and replaces it after the canceled request returns. Pressing F6 while a request
+is in progress cancels it. A lost game connection, quitting the client, or
+closing the session also cancels the request. Auto mode stays selected across a
+reconnect, but it waits for a new prompt or whisper after the connection
+returns.
+
+`dr-charm` keeps the most recent 16 KiB of Game and Familiar text for the agent.
+After agent history grows past 32 KiB, `dr-charm` asks the model to condense it
+before the next action request. Neither history nor recent game text is saved
+when you quit. Whispers and agent replies never enter the session transcript.
+When logging is on, commands the agent sends do.
+
 ## Command-line options
 
 | Option | Description |

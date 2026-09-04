@@ -35,6 +35,7 @@ type Update struct {
 	Snapshot    Snapshot
 	Display     []DisplayEvent
 	Diagnostics []Diagnostic
+	Prompted    bool
 	Err         error
 }
 

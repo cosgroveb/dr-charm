@@ -179,6 +179,7 @@ func (r *reducer) applyAt(action protocolAction, now time.Time) (Update, bool) {
 		case eventPrompt:
 			r.public.Room = cloneRoom(r.pendingRoom)
 			r.public.Prompt = event.value
+			update.Prompted = true
 			publish = true
 		case eventSettingsInfo:
 			if r.public.Connection != ConnectionReady {

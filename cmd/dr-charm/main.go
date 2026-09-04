@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
+	"dr-charm/internal/agent"
 	"dr-charm/internal/config"
 	"dr-charm/internal/dragonrealms"
 	"dr-charm/internal/dragonrealms/presenter"
@@ -208,10 +209,16 @@ func newApplicationWithOptions(ctx context.Context, cfg config.Config, paths use
 	if err != nil {
 		return nil, ui.EnhancedModel{}, err
 	}
+	var agentClient *agent.Client
+	if cfg.Agent != nil {
+		agentClient = agent.New(agent.Config{Endpoint: cfg.Agent.Endpoint, APIKey: cfg.Agent.APIKey, Model: cfg.Agent.Model, Character: cfg.Agent.Character})
+	}
 	return session, ui.InitialEnhancedModel(presenter.New(session, paths.MapDir), ui.Options{
 		Character: cfg.Character,
 		LogDir:    paths.LogDir,
 		ThemeDir:  paths.ThemeDir,
 		Logging:   logging,
+		Agent:     agentClient,
+		Context:   ctx,
 	}), nil
 }

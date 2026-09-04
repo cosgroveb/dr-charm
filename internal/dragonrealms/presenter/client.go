@@ -52,7 +52,7 @@ func (c *Client) translate(u dragonrealms.Update) presentation.Update {
 }
 
 func Translate(u dragonrealms.Update) presentation.Update {
-	p := presentation.Update{Title: terminaltext.Sanitize(u.Snapshot.Room.Title), Prompt: terminaltext.Sanitize(u.Snapshot.Prompt), Character: terminaltext.Sanitize(u.Snapshot.Character), Status: statusFields(u.Snapshot)}
+	p := presentation.Update{Title: terminaltext.Sanitize(u.Snapshot.Room.Title), Prompt: terminaltext.Sanitize(u.Snapshot.Prompt), Character: terminaltext.Sanitize(u.Snapshot.Character), Prompted: u.Prompted, Status: statusFields(u.Snapshot)}
 	p.Entries = append(p.Entries,
 		presentation.Entry{Pane: presentation.RoomPane, Text: strings.Join(roomLines(u.Snapshot.Room), "\n"), Operation: presentation.Replace},
 		presentation.Entry{Pane: presentation.HandsPane, Text: strings.Join(handsLines(u.Snapshot), "\n"), Operation: presentation.Replace},

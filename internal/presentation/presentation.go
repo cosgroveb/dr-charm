@@ -36,6 +36,7 @@ type StatusField struct{ Label, Value string }
 type Notice struct{ Text string }
 type Update struct {
 	Connection    ConnectionState
+	Prompted      bool
 	Status        []StatusField
 	Entries       []Entry
 	Notices       []Notice

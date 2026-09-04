@@ -1,4 +1,4 @@
-.TH DR-CHARM 1 "2026-09-01" "dr-charm" "User Commands"
+.TH DR-CHARM 1 "2026-09-04" "dr-charm" "User Commands"
 .SH NAME
 dr-charm \- DragonRealms terminal client
 .SH SYNOPSIS
@@ -25,7 +25,7 @@ Send the command line.
 Recall commands from the current session.
 .TP
 .B Ctrl-G
-Open the command line in \fB$VISUAL\fR or \fB$EDITOR\fR.
+Open the current input in \fB$VISUAL\fR or \fB$EDITOR\fR.
 .TP
 .B Page Up, Page Down, Home, End
 Scroll the focused output pane. When Input is focused, Home and End move within
@@ -54,6 +54,11 @@ Toggle session logging.
 .TP
 .B F5
 Toggle the Room pane between room details and the learned map.
+.TP
+.B F6
+Toggle auto mode. Enabling it does not make a model request. While auto mode is
+on and the status bar shows \fBREADY\fR, Enter whispers to the agent instead of
+sending a game command.
 .TP
 .B Escape
 Leave help or the theme selector.
@@ -92,11 +97,35 @@ Aliases for look, inventory, stand, kneel, sit, lie, hide, sneak, and search.
 .TP
 .B att, ki, sk, arr, loot
 Aliases for attack, kill, skin, arrange, and \fBloot all\fR.
+.SH AUTO MODE
+Auto mode is available when the configuration file contains an \fBagent\fR block.
+It starts off. Press F6 to enable it. Once the status bar shows \fBREADY\fR, a
+new DragonRealms prompt or a whisper wakes the agent. The agent may reply in
+the client or choose one game command.
+.PP
+The block accepts \fBendpoint\fR, \fBapi_key\fR, \fBmodel\fR, and
+\fBcharacter\fR. The endpoint is the complete HTTP or HTTPS URL and its path
+must end in \fB/responses\fR. The API key is optional. The other three values
+are required when the block is present. The URL cannot contain embedded
+credentials or a fragment.
+.PP
+Use an endpoint you trust. Every request includes recent Game and Familiar
+text. Requests may also include the configured agent character, earlier agent
+conversation, and whispers. When that conversation grows long, \fBdr-charm\fR
+asks the endpoint to summarize its older parts. It does not add your
+DragonRealms account or password to requests.
+.PP
+The status bar shows \fBAGENT off\fR, \fBAGENT idle\fR,
+\fBAGENT thinking\fR, or \fBAGENT error\fR. F6 cancels a request when turning
+auto mode off. A new prompt or whisper cancels the current request before
+starting another one. Disconnecting or quitting also cancels it. The client
+discards agent conversation when it exits.
 .SH FILES
 .TP
 .I $XDG_CONFIG_HOME/dr-charm/config.yaml
-Default configuration file containing account credentials. A first run with no
-configuration writes a commented template with owner-only permissions, then exits.
+Default configuration file containing account credentials and optional agent
+settings. A first run without configuration writes a commented template with
+owner-only permissions, then exits.
 When \fBXDG_CONFIG_HOME\fR is unset, use \fI~/.config/dr-charm/config.yaml\fR.
 .TP
 .I $XDG_CONFIG_HOME/dr-charm/themes
@@ -128,9 +157,10 @@ Absolute base directory for session transcripts.
 .B XDG_DATA_HOME
 Absolute base directory for the learned map.
 .SH SECURITY
-Configuration files and logs contain account data. New configuration files and
-logs are readable only by their owner. \fBdr-charm\fR accepts existing
-configuration modes.
+Configuration files contain account credentials. Session logs contain
+character and gameplay data. New configuration files and logs are readable
+only by their owner. \fBdr-charm\fR leaves permissions on existing
+configuration files unchanged.
 .SH SEE ALSO
 .UR https://github.com/cosgroveb/dr-charm
 Project README and player documentation

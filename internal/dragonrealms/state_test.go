@@ -55,6 +55,20 @@ func TestReducerPublishesSemanticSnapshot(t *testing.T) {
 	}
 }
 
+func TestReducerPublishesPromptEventOnce(t *testing.T) {
+	t.Parallel()
+
+	reducer := newReducer("Hero")
+	prompt, published := reducer.apply(protocolAction{events: []protocolEvent{{kind: eventPrompt, value: ">"}}})
+	if !published || !prompt.Prompted || prompt.Snapshot.Prompt != ">" {
+		t.Fatalf("prompt update=%+v published=%v", prompt, published)
+	}
+	later, published := reducer.apply(protocolAction{events: []protocolEvent{{kind: eventRoundTime, timestamp: time.Unix(1, 0)}}})
+	if !published || later.Prompted || later.Snapshot.Prompt != ">" {
+		t.Fatalf("later update=%+v published=%v", later, published)
+	}
+}
+
 func TestReducerKeepsPrivateProtocolState(t *testing.T) {
 	t.Parallel()
 

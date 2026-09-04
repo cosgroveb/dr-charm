@@ -4,3 +4,11 @@
 account:
 password:
 character:
+
+# Optional auto mode.
+# agent:
+#   endpoint: http://localhost:4000/v1/responses
+#   api_key:
+#   model:
+#   character: |
+#     Describe how the agent should play this character.

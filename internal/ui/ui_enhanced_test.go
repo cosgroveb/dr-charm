@@ -565,6 +565,7 @@ type fakeLogger struct {
 	writeErr  error
 	stopErr   error
 	stopCalls int
+	writes    []string
 }
 
 func (l *fakeLogger) Start(string) (telemetry.StartResult, error) {
@@ -578,9 +579,12 @@ func (l *fakeLogger) Stop() error {
 	return l.stopErr
 }
 
-func (l *fakeLogger) Write(string) error { return l.writeErr }
-func (l *fakeLogger) IsEnabled() bool    { return l.enabled }
-func (l *fakeLogger) Path() string       { return "/tmp/dr-charm.log" }
+func (l *fakeLogger) Write(line string) error {
+	l.writes = append(l.writes, line)
+	return l.writeErr
+}
+func (l *fakeLogger) IsEnabled() bool { return l.enabled }
+func (l *fakeLogger) Path() string    { return "/tmp/dr-charm.log" }
 
 func (s *fakeSession) Send(command string) error {
 	s.sent = append(s.sent, command)

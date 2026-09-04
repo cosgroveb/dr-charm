@@ -18,6 +18,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install cloc
+        run: sudo apt-get update && sudo apt-get install -y cloc
       - name: Check formatting
         shell: bash
         run: |
@@ -28,6 +30,8 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      - name: Check source size
+        run: make agent-sloc app-sloc
       - name: Test
         run: go test -race -shuffle=on ./...
       - name: Build

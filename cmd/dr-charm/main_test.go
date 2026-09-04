@@ -95,6 +95,7 @@ func TestExecuteFirstRunCreatesTemplateAndDoesNotRunApp(t *testing.T) {
 
 func TestExecuteRunsApplicationWithConfigAndNoLog(t *testing.T) {
 	var gotLogging bool
+	agentConfig := &config.Agent{Endpoint: "http://localhost/v1/responses", Model: "local", Character: "cautious"}
 	deps := dependencies{
 		resolvePaths: func() (userdirs.Paths, error) {
 			return userdirs.Paths{ConfigFile: "/tmp/config.yaml", ThemeDir: "/tmp/themes", LogDir: "/tmp/logs", MapDir: "/tmp/maps"}, nil
@@ -103,10 +104,10 @@ func TestExecuteRunsApplicationWithConfigAndNoLog(t *testing.T) {
 			if explicit != "/chosen.yaml" || defaultPath != "/tmp/config.yaml" {
 				t.Fatalf("load args explicit=%q default=%q", explicit, defaultPath)
 			}
-			return config.Result{Config: config.Config{Account: "a", Password: "p", Character: "c"}}, nil
+			return config.Result{Config: config.Config{Account: "a", Password: "p", Character: "c", Agent: agentConfig}}, nil
 		},
 		runApp: func(_ context.Context, cfg config.Config, paths userdirs.Paths, logging bool) error {
-			if cfg.Character != "c" || paths.LogDir != "/tmp/logs" || paths.ThemeDir != "/tmp/themes" || paths.MapDir != "/tmp/maps" {
+			if cfg.Character != "c" || cfg.Agent != agentConfig || paths.LogDir != "/tmp/logs" || paths.ThemeDir != "/tmp/themes" || paths.MapDir != "/tmp/maps" {
 				t.Fatalf("app args cfg=%+v paths=%+v", cfg, paths)
 			}
 			gotLogging = logging

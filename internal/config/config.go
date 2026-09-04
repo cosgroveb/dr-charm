@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,12 +13,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const Template = "# DragonRealms account configuration.\n# Fill in all three values, then run dr-charm again.\n\naccount:\npassword:\ncharacter:\n"
+const Template = "# DragonRealms account configuration.\n# Fill in all three values, then run dr-charm again.\n\naccount:\npassword:\ncharacter:\n\n# Optional auto mode.\n# agent:\n#   endpoint: http://localhost:4000/v1/responses\n#   api_key:\n#   model:\n#   character: |\n#     Describe how the agent should play this character.\n"
+
+type Agent struct {
+	Endpoint  string `yaml:"endpoint"`
+	APIKey    string `yaml:"api_key"`
+	Model     string `yaml:"model"`
+	Character string `yaml:"character"`
+}
 
 type Config struct {
 	Account   string `yaml:"account"`
 	Password  string `yaml:"password"`
 	Character string `yaml:"character"`
+	Agent     *Agent `yaml:"agent,omitempty"`
 }
 type Result struct {
 	Config  Config
@@ -97,8 +106,25 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Character) == "" {
 		missing = append(missing, "character")
 	}
+	if c.Agent != nil {
+		if strings.TrimSpace(c.Agent.Endpoint) == "" {
+			missing = append(missing, "agent.endpoint")
+		}
+		if strings.TrimSpace(c.Agent.Model) == "" {
+			missing = append(missing, "agent.model")
+		}
+		if strings.TrimSpace(c.Agent.Character) == "" {
+			missing = append(missing, "agent.character")
+		}
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config fields: %s", strings.Join(missing, ", "))
+	}
+	if c.Agent != nil {
+		u, err := url.Parse(c.Agent.Endpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" || !strings.HasSuffix(u.Path, "/responses") {
+			return errors.New("agent.endpoint must be an HTTP or HTTPS URL ending in /responses without credentials or a fragment")
+		}
 	}
 	return nil
 }

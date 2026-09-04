@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"dr-charm/internal/agent"
 	"dr-charm/internal/automation"
 	"dr-charm/internal/presentation"
 	"dr-charm/internal/telemetry"
@@ -48,11 +50,9 @@ type EnhancedModel struct {
 	triggers  *automation.TriggerManager
 	now       func() time.Time
 
-	width      int
-	height     int
-	quitting   bool
-	viewMode   ViewMode
-	sourceDone bool
+	width, height        int
+	quitting, sourceDone bool
+	viewMode             ViewMode
 
 	input        textinput.Model
 	history      []string
@@ -77,6 +77,7 @@ type EnhancedModel struct {
 	activePane     string
 	unread         map[string]bool
 	showMap        bool
+	agent          agentState
 }
 
 type Options struct {
@@ -84,6 +85,8 @@ type Options struct {
 	LogDir    string
 	ThemeDir  string
 	Logging   bool
+	Agent     *agent.Client
+	Context   context.Context
 }
 
 type logState uint8
@@ -106,6 +109,9 @@ const (
 
 // InitialEnhancedModel constructs the UI with explicit runtime options.
 func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
+	if options.Context == nil {
+		options.Context = context.Background()
+	}
 	input := textinput.New()
 	input.Prompt = "> "
 	input.CharLimit = 4096
@@ -142,6 +148,10 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 		familiarView:   familiar,
 		activePane:     paneInput,
 		unread:         map[string]bool{},
+		agent:          agentState{ctx: options.Context},
+	}
+	if options.Agent != nil {
+		m.agent.client = options.Agent
 	}
 	for _, warning := range m.themes.warnings {
 		m.appendSystem("theme warning: " + terminaltext.Sanitize(warning.Error()))
@@ -180,15 +190,26 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case presentation.Update:
+		wasReady := m.snapshot.Connection == presentation.Ready
 		m.applySessionUpdate(message)
+		if wasReady && message.Connection != presentation.Ready {
+			m.cancelAgent()
+		}
 		if m.sourceDone {
 			return m, nil
 		}
-		return m, waitForSessionUpdate(m.session)
+		wait := waitForSessionUpdate(m.session)
+		if message.Prompted && message.Connection == presentation.Ready {
+			return m, tea.Batch(m.wakeAgent(), wait)
+		}
+		return m, wait
+	case agentResultMsg:
+		return m, m.handleAgentResult(message)
 	case editorFinishedMsg:
 		m.finishEditor(message)
 		return m, nil
 	case sessionClosedMsg:
+		m.cancelAgent()
 		m.sourceDone = true
 		m.snapshot.Connection = presentation.Disconnected
 		m.appendSystem("disconnected")
@@ -218,6 +239,7 @@ func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {
 		default:
 			text := entry.Text
 			if entry.Pane == presentation.Game || entry.Pane == presentation.Familiar {
+				m.addRecent(entry.Text)
 				m.writeLog(entry.Text)
 				text = m.highlightText(text)
 			}
@@ -232,6 +254,7 @@ func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {
 func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case message.Code == 'c' && message.Mod == tea.ModCtrl:
+		m.cancelAgent()
 		m.quitting = true
 		if err := m.stopLogging(); err != nil {
 			m.appendSystem("logging failed: " + terminaltext.Sanitize(err.Error()))
@@ -262,6 +285,9 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 	case tea.KeyF5:
 		m.toggleMap()
 		return m, nil
+	case tea.KeyF6:
+		m.toggleAgent()
+		return m, nil
 	case tea.KeyTab:
 		if m.viewMode == ViewModeMulti {
 			m.cyclePane(!message.Mod.Contains(tea.ModShift))
@@ -281,6 +307,9 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 
 	switch message.Code {
 	case tea.KeyEnter:
+		if m.agent.enabled {
+			return m, m.whisper()
+		}
 		return m.sendInput()
 	case tea.KeyUp:
 		m.previousHistory()
@@ -318,17 +347,24 @@ func (m EnhancedModel) sendInput() (tea.Model, tea.Cmd) {
 	if strings.TrimSpace(original) == "" {
 		return m, nil
 	}
+	m.sendCommand(original, "> ", true)
+	return m, nil
+}
+
+func (m *EnhancedModel) sendCommand(original, prefix string, remember bool) bool {
 	command := m.triggers.ProcessCommand(original)
 	if err := m.session.Send(command); err != nil {
 		m.appendSystem("send failed: " + terminaltext.Sanitize(err.Error()))
-		return m, nil
+		return false
 	}
 	m.writeLog("> " + original)
-	m.appendPane(paneMain, "> "+original)
-	m.history = append(m.history, original)
-	m.historyIndex = len(m.history)
-	m.input.Reset()
-	return m, nil
+	m.appendPane(paneMain, prefix+original)
+	if remember {
+		m.history = append(m.history, original)
+		m.historyIndex = len(m.history)
+		m.input.Reset()
+	}
+	return true
 }
 
 func (m *EnhancedModel) highlightText(text string) string {
@@ -616,11 +652,12 @@ F2          Toggle multi/single-pane view
 F3          Select theme
 F4          Toggle logging
 F5          Toggle Room/Map pane
+F6          Toggle auto mode
 Tab         Cycle input and visible panes
 PgUp/PgDn   Scroll active pane
 Home/End    Jump active pane
 Up/Down     Command history
-Ctrl-G      Edit command in $VISUAL or $EDITOR
+Ctrl-G      Edit input in $VISUAL or $EDITOR
 Ctrl-C      Quit
 
 Press ESC to return`
@@ -651,6 +688,13 @@ func (m EnhancedModel) buildTitle() string {
 
 func (m EnhancedModel) buildStatusBar() string {
 	parts := []string{connectionText(m.snapshot.Connection), "LOG " + m.logText()}
+	if m.agent.client != nil {
+		status := "off"
+		if m.agent.enabled {
+			status = m.agent.status
+		}
+		parts = append(parts, "AGENT "+status)
+	}
 	for _, field := range m.snapshot.Status {
 		if field.Label == "" {
 			parts = append(parts, field.Value)
@@ -662,6 +706,10 @@ func (m EnhancedModel) buildStatusBar() string {
 }
 
 func (m EnhancedModel) buildInput() string {
+	if m.agent.enabled {
+		m.input.Prompt = "whisper> "
+		return m.input.View()
+	}
 	prompt := m.snapshot.Prompt
 	if prompt == "" {
 		prompt = ">"
@@ -672,6 +720,9 @@ func (m EnhancedModel) buildInput() string {
 
 func (m EnhancedModel) renderInputPane() string {
 	title := "Input"
+	if m.agent.enabled {
+		title = "Whisper"
+	}
 	style := m.themes.borderStyle().Width(m.width - 2)
 	if m.activePane == paneInput {
 		title = "> " + title
@@ -694,6 +745,7 @@ func (m EnhancedModel) paneViews() paneViews {
 
 // Close flushes UI-owned resources after Bubble Tea restores the terminal.
 func (m EnhancedModel) Close() error {
+	m.cancelAgent()
 	return m.stopLogging()
 }
 
@@ -929,7 +981,7 @@ func (m *EnhancedModel) finishEditor(message editorFinishedMsg) {
 	value := strings.TrimRight(string(data), "\r\n")
 	if strings.ContainsAny(value, "\r\n") {
 		m.input.SetValue(message.draft)
-		m.appendSystem("editor returned more than one command")
+		m.appendSystem("editor returned more than one line")
 		return
 	}
 	m.input.SetValue(value)
