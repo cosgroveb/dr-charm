@@ -42,13 +42,18 @@ func New(config Config) *Client {
 }
 
 type wireRequest struct {
-	Model             string `json:"model"`
-	Instructions      string `json:"instructions"`
-	Input             string `json:"input"`
-	Tools             []tool `json:"tools,omitempty"`
-	ParallelToolCalls bool   `json:"parallel_tool_calls"`
-	Store             bool   `json:"store"`
-	MaxOutputTokens   int    `json:"max_output_tokens"`
+	Model             string      `json:"model"`
+	Instructions      string      `json:"instructions"`
+	Input             []inputItem `json:"input"`
+	Tools             []tool      `json:"tools,omitempty"`
+	ParallelToolCalls bool        `json:"parallel_tool_calls"`
+	Store             bool        `json:"store"`
+	Stream            bool        `json:"stream"`
+	MaxOutputTokens   int         `json:"max_output_tokens"`
+}
+type inputItem struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 type tool struct {
 	Type        string `json:"type"`
@@ -113,7 +118,7 @@ func commandTool() tool {
 	}}
 }
 
-func input(history, recent string, whispers []string) string {
+func input(history, recent string, whispers []string) []inputItem {
 	var b strings.Builder
 	fmt.Fprintf(&b, "PLAYER-AGENT HISTORY\n%s\n\nRECENT GAME TEXT\n%s", history, recent)
 	if len(whispers) > 0 {
@@ -122,10 +127,11 @@ func input(history, recent string, whispers []string) string {
 			b.WriteString("\n- " + terminaltext.Sanitize(whisper))
 		}
 	}
-	return b.String()
+	return []inputItem{{Role: "user", Content: b.String()}}
 }
 
 func (c *Client) call(ctx context.Context, payload wireRequest) (wireResponse, error) {
+	payload.Stream = true
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return wireResponse{}, errors.New("agent request invalid")
@@ -135,6 +141,7 @@ func (c *Client) call(ctx context.Context, payload wireRequest) (wireResponse, e
 		return wireResponse{}, errors.New("agent request invalid")
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	if c.config.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.config.APIKey)
 	}
@@ -156,12 +163,53 @@ func (c *Client) call(ctx context.Context, payload wireRequest) (wireResponse, e
 	if !utf8.Valid(data) {
 		return wireResponse{}, errors.New("agent response invalid")
 	}
-	var decoded wireResponse
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if decoder.Decode(&decoded) != nil || decoder.Decode(&struct{}{}) != io.EOF || decoded.Status != "completed" {
+	decoded, ok := decodeStream(data)
+	if !ok {
 		return wireResponse{}, errors.New("agent response invalid")
 	}
 	return decoded, nil
+}
+
+func decodeStream(data []byte) (wireResponse, bool) {
+	var response wireResponse
+	completed := false
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+			continue
+		}
+		var event struct {
+			Type     string     `json:"type"`
+			Item     outputItem `json:"item"`
+			Response struct {
+				Status string `json:"status"`
+			} `json:"response"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(payload))
+		if decoder.Decode(&event) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+			return wireResponse{}, false
+		}
+		switch event.Type {
+		case "response.output_item.done":
+			if completed {
+				return wireResponse{}, false
+			}
+			response.Output = append(response.Output, event.Item)
+		case "response.completed":
+			if completed || event.Response.Status != "completed" {
+				return wireResponse{}, false
+			}
+			completed = true
+			response.Status = event.Response.Status
+		case "response.failed", "response.incomplete", "error":
+			return wireResponse{}, false
+		}
+	}
+	return response, completed
 }
 
 func requestError(ctx context.Context, err error, fallback string) error {

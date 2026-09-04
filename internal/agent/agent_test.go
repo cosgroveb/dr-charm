@@ -45,15 +45,15 @@ func TestStepSendsResponsesRequestAndReturnsTextHistory(t *testing.T) {
 	if request.History != "Earlier record" || len(request.Whispers) != 1 {
 		t.Fatalf("request mutated: %+v", request)
 	}
-	if got.Model != "local" || got.Store || got.MaxOutputTokens != 512 || got.ParallelToolCalls || len(got.Tools) != 1 || got.Tools[0].Name != "send_command" || !got.Tools[0].Strict {
+	if got.Model != "local" || got.Store || !got.Stream || got.MaxOutputTokens != 512 || got.ParallelToolCalls || len(got.Tools) != 1 || got.Tools[0].Name != "send_command" || !got.Tools[0].Strict {
 		t.Fatalf("wire request=%+v", got)
 	}
-	for _, field := range []string{`"store":false`, `"parallel_tool_calls":false`, `"max_output_tokens":512`, `"additionalProperties":false`, `"required":["command"]`} {
+	for _, field := range []string{`"store":false`, `"stream":true`, `"parallel_tool_calls":false`, `"max_output_tokens":512`, `"additionalProperties":false`, `"required":["command"]`} {
 		if !strings.Contains(raw, field) {
 			t.Fatalf("request body omits %s: %s", field, raw)
 		}
 	}
-	if !strings.Contains(got.Instructions, "A cautious Moon Mage.") || !strings.Contains(got.Input, "Earlier record") || !strings.Contains(got.Input, "A goblin arrives.") || !strings.Contains(got.Input, "stay safe") {
+	if len(got.Input) != 1 || got.Input[0].Role != "user" || !strings.Contains(got.Instructions, "A cautious Moon Mage.") || !strings.Contains(got.Input[0].Content, "Earlier record") || !strings.Contains(got.Input[0].Content, "A goblin arrives.") || !strings.Contains(got.Input[0].Content, "stay safe") {
 		t.Fatalf("instructions/input missing data: %+v", got)
 	}
 }
@@ -100,7 +100,7 @@ func TestStepRejectsInvalidOutcomesWithoutHistory(t *testing.T) {
 		"control text":             completedText("\u001b[31m"),
 		"empty":                    `{"status":"completed","output":[]}`,
 		"malformed":                `{`,
-		"second document":          completedText("act") + `{}`,
+		"second document":          `data: {"type":"response.completed","response":{"status":"completed"}} {}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestStepRejectsBoundsAndUnsafeBytes(t *testing.T) {
 	tests := map[string]string{
 		"large text":    completedText(strings.Repeat("x", outputLimit+1)),
 		"large command": completedCall("send_command", fmt.Sprintf(`{"command":%q}`, strings.Repeat("x", 4097))),
-		"invalid UTF-8": "{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"" + string([]byte{0xff}) + "\"}]}]}",
+		"invalid UTF-8": "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"" + string([]byte{0xff}) + "\"}]}}\n\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -161,10 +161,11 @@ func TestStepCompactsHistoryWithSameRecentContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 || len(requests[0].Tools) != 0 || len(requests[1].Tools) != 1 || !strings.Contains(requests[0].Input, "room") || !strings.Contains(requests[1].Input, "room") {
+	if len(requests) != 2 || len(requests[0].Tools) != 0 || len(requests[1].Tools) != 1 || len(requests[0].Input) != 1 || len(requests[1].Input) != 1 {
 		t.Fatalf("requests=%+v", requests)
 	}
-	if !strings.Contains(requests[0].Input, history) || strings.Contains(requests[1].Input, history) || !strings.Contains(requests[1].Input, "Earlier play:\n") {
+	firstInput, secondInput := requests[0].Input[0].Content, requests[1].Input[0].Content
+	if !strings.Contains(firstInput, "room") || !strings.Contains(secondInput, "room") || !strings.Contains(firstInput, history) || strings.Contains(secondInput, history) || !strings.Contains(secondInput, "Earlier play:\n") {
 		t.Fatal("history was not replaced before normal request")
 	}
 	if !strings.HasPrefix(result.History, "Earlier play:\n") || strings.Contains(result.History, "room") {
@@ -359,23 +360,45 @@ func clientReturning(t *testing.T, body string, status int) (*Client, func()) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
-		io.WriteString(w, body)
+		io.WriteString(w, asStream(body))
 	}))
 	return New(Config{Endpoint: server.URL, Model: "m", Character: "c"}), server.Close
 }
 
 func completedText(text string) string {
-	data, _ := json.Marshal(map[string]any{
+	return asStream(string(mustJSON(map[string]any{
 		"status": "completed",
 		"output": []any{map[string]any{
 			"type":    "message",
 			"content": []any{map[string]any{"type": "output_text", "text": text}},
 		}},
-	})
-	return string(data)
+	})))
 }
 
 func completedCall(name, arguments string) string {
-	data, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"type": "function_call", "name": name, "arguments": arguments}}})
-	return string(data)
+	return asStream(string(mustJSON(map[string]any{"status": "completed", "output": []any{map[string]any{"type": "function_call", "name": name, "arguments": arguments}}})))
+}
+
+func asStream(body string) string {
+	if strings.HasPrefix(body, "data:") {
+		return body
+	}
+	var response wireResponse
+	if json.Unmarshal([]byte(body), &response) != nil {
+		return "data: " + body + "\n\n"
+	}
+	var stream strings.Builder
+	for _, item := range response.Output {
+		fmt.Fprintf(&stream, "data: %s\n\n", mustJSON(map[string]any{"type": "response.output_item.done", "item": item}))
+	}
+	fmt.Fprintf(&stream, "data: %s\n\ndata: [DONE]\n\n", mustJSON(map[string]any{"type": "response." + response.Status, "response": response}))
+	return stream.String()
+}
+
+func mustJSON(value any) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
