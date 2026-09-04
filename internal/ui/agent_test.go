@@ -20,6 +20,7 @@ func (f agentFunc) Step(ctx context.Context, request agent.Request) (agent.Resul
 }
 
 func TestAgentToggleWhisperPromptAndPresentation(t *testing.T) {
+	useANSI256(t)
 	var requests []agent.Request
 	stepper := agentFunc(func(_ context.Context, request agent.Request) (agent.Result, error) {
 		requests = append(requests, request)
@@ -39,12 +40,22 @@ func TestAgentToggleWhisperPromptAndPresentation(t *testing.T) {
 	model.input.SetValue("hold here")
 	updated, cmd = model.Update(key(tea.KeyEnter))
 	model = updated.(EnhancedModel)
-	if cmd == nil || model.input.Value() != "" || !strings.Contains(strings.Join(model.mainOutput, "\n"), "[whisper] hold here") || len(model.session.(*fakeSession).sent) != 0 || !strings.Contains(model.buildStatusBar(), "AGENT thinking") {
+	whisper := model.mainOutput[len(model.mainOutput)-1]
+	if cmd == nil || model.input.Value() != "" || !strings.Contains(whisper, "\x1b[") || !strings.Contains(whisper, "[whisper]") || !strings.Contains(whisper, "hold here") || len(model.session.(*fakeSession).sent) != 0 || !strings.Contains(model.buildStatusBar(), "AGENT thinking") {
 		t.Fatalf("whisper state input=%q output=%v", model.input.Value(), model.mainOutput)
 	}
 	updated, _ = model.Update(cmd())
 	model = updated.(EnhancedModel)
-	if len(requests) != 1 || len(requests[0].Whispers) != 1 || model.agent.history != "accepted" || !strings.Contains(strings.Join(model.mainOutput, "\n"), "[agent] Wait.\n[agent] Watch.") || len(logger.writes) != 0 {
+	output := strings.Join(model.mainOutput, "\n")
+	if len(model.mainOutput) < 2 {
+		t.Fatalf("agent reply missing: %v", model.mainOutput)
+	}
+	for _, line := range model.mainOutput[len(model.mainOutput)-2:] {
+		if !strings.Contains(line, "\x1b[") || !strings.Contains(line, "[agent]") {
+			t.Fatalf("agent reply is not emphasized: %q", line)
+		}
+	}
+	if len(requests) != 1 || len(requests[0].Whispers) != 1 || model.agent.history != "accepted" || !strings.Contains(output, "Wait.") || !strings.Contains(output, "Watch.") || len(logger.writes) != 0 {
 		t.Fatalf("request=%+v model=%+v", requests, model.agent)
 	}
 

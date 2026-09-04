@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"dr-charm/internal/agent"
 	"dr-charm/internal/presentation"
 	"dr-charm/internal/terminaltext"
@@ -114,7 +115,7 @@ func (m *EnhancedModel) handleAgentResult(message agentResultMsg) tea.Cmd {
 			return nil
 		}
 	} else {
-		m.appendPane(paneMain, "[agent] "+strings.ReplaceAll(message.result.Text, "\n", "\n[agent] "))
+		m.appendAgentMessage("[agent]", message.result.Text)
 	}
 	m.agent.history = message.result.History
 	m.agent.whispers = nil
@@ -132,9 +133,19 @@ func (m *EnhancedModel) whisper() tea.Cmd {
 		return nil
 	}
 	m.agent.whispers = append(m.agent.whispers, value)
-	m.appendPane(paneMain, "[whisper] "+value)
+	m.appendAgentMessage("[whisper]", value)
 	m.input.Reset()
 	return m.wakeAgent()
+}
+
+func (m *EnhancedModel) appendAgentMessage(label, text string) {
+	badge := lipgloss.NewStyle().Bold(true).Reverse(true).Render(label)
+	body := lipgloss.NewStyle().Bold(true)
+	lines := splitLines(text)
+	for index := range lines {
+		lines[index] = badge + " " + body.Render(lines[index])
+	}
+	m.appendPane(paneMain, strings.Join(lines, "\n"))
 }
 
 func (m *EnhancedModel) addRecent(text string) {
