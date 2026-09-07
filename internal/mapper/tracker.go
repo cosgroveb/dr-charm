@@ -87,9 +87,9 @@ func movementCommand(command string) (Direction, bool) {
 	}
 }
 
-func (t *Tracker) Render() string {
+func (t *Tracker) Render() RenderedMap {
 	if t.zone == nil || len(t.zone.Nodes) == 0 {
-		return "No rooms learned yet."
+		return RenderedMap{Lines: []string{"No rooms learned yet."}}
 	}
 	return render(t.zone, t.currentID)
 }

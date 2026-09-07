@@ -20,8 +20,8 @@ Replace each placeholder with a value accepted by your model provider. Leave
 endpoint must support streaming OpenAI Responses requests and function tools.
 A Chat Completions endpoint will not work.
 
-Choose an endpoint you trust. Each request includes recent Game and Familiar
-text.
+Choose an endpoint you trust. Each request includes recent game and familiar
+text from the terminal transcript.
 
 See the [configuration reference](configuration.md#auto-mode) for field details
 and the data included with each request.
@@ -36,9 +36,9 @@ To wake it now, type a whisper and press Enter.
 
 ## Whisper to the agent
 
-While auto mode is on, the Input pane becomes Whisper. Text entered there goes
-to the agent instead of DragonRealms. The agent can reply in the Game pane or
-send one game command.
+While auto mode is on, the input line becomes Whisper. Text entered there goes
+to the agent instead of DragonRealms. The agent can reply in the terminal
+transcript or send one game command.
 
 Whispers and replies use bold text with reverse-video `[whisper]` and `[agent]`
 labels. Commands start with `[agent] >`.

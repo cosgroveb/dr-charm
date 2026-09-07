@@ -38,8 +38,9 @@ type flagsCapture struct {
 }
 
 type reducer struct {
-	public      Snapshot
-	pendingRoom Room
+	public                 Snapshot
+	pendingRoom            Room
+	pendingRoomObservation bool
 
 	components       map[string]string
 	resources        map[string]int
@@ -179,6 +180,8 @@ func (r *reducer) applyAt(action protocolAction, now time.Time) (Update, bool) {
 		case eventPrompt:
 			r.public.Room = cloneRoom(r.pendingRoom)
 			r.public.Prompt = event.value
+			update.RoomObserved = r.pendingRoomObservation
+			r.pendingRoomObservation = false
 			update.Prompted = true
 			publish = true
 		case eventSettingsInfo:
@@ -296,18 +299,23 @@ func (r *reducer) applyComponent(event protocolEvent) {
 	}
 	switch id {
 	case "room title":
+		r.pendingRoomObservation = true
 		if event.value != r.pendingRoom.Title {
 			r.creatureStatuses = make(map[string]creatureStatus)
 		}
 		r.pendingRoom.Title = event.value
 	case "room desc":
+		r.pendingRoomObservation = true
 		r.pendingRoom.Description = event.value
 	case "room exits":
+		r.pendingRoomObservation = true
 		r.pendingRoom.Exits = splitRoomValues(event.value)
 	case "room objs":
+		r.pendingRoomObservation = true
 		r.pendingRoom.Objects = splitRoomValues(event.value)
 		r.pendingRoom.Creatures = filterLiveCreatures(event.items)
 	case "room players":
+		r.pendingRoomObservation = true
 		r.pendingRoom.Players = splitRoomValues(event.value)
 	case "pc name":
 		r.public.Character = strings.TrimSpace(event.value)

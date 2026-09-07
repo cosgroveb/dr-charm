@@ -165,9 +165,23 @@ func TestRenderShowsCurrentRoomAndEdges(t *testing.T) {
 	tracker.ObserveRoom(Room{Title: "[North Road]", Exits: []string{"south"}})
 
 	got := tracker.Render()
-	for _, want := range []string{"@", "o", "│", "@ #2 [North Road]"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("render missing %q:\n%s", want, got)
+	for _, want := range []string{"@", "o", "│"} {
+		if !strings.Contains(strings.Join(got.Lines, "\n"), want) {
+			t.Fatalf("render missing %q:\n%v", want, got.Lines)
 		}
+	}
+}
+
+func TestRenderMapHasTrimmedCurrentCoordinatesWithoutRoomFooter(t *testing.T) {
+	tracker := Open(t.TempDir())
+	tracker.ObserveRoom(Room{ID: "1", Title: "[One]", Exits: []string{"north"}})
+	tracker.ObserveCommand("north")
+	tracker.ObserveRoom(Room{ID: "2", Title: "[Two]", Exits: []string{"south"}})
+	got := tracker.Render()
+	if got.CurrentToken != "2" || got.CurrentLine < 0 || got.CurrentLine >= len(got.Lines) || got.CurrentColumn < 0 || got.CurrentColumn >= len([]rune(got.Lines[got.CurrentLine])) {
+		t.Fatalf("invalid current cell: %#v", got)
+	}
+	if strings.Contains(strings.Join(got.Lines, "\n"), "Exits:") || strings.Contains(strings.Join(got.Lines, "\n"), "[Two]") {
+		t.Fatalf("map leaked dashboard metadata: %#v", got.Lines)
 	}
 }

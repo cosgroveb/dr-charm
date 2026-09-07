@@ -39,7 +39,7 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 	if !ok {
 		t.Fatal("Next closed unexpectedly")
 	}
-	if got.Connection != presentation.Ready || got.Title != "[Room]" || got.Prompt != ">" || got.Character != "Hero" || !got.Prompted {
+	if got.Connection != presentation.Ready || got.Prompt != ">" || got.Character != "Hero" || !got.Prompted {
 		t.Fatalf("top-level fields = %#v", got)
 	}
 	if want := []presentation.StatusField{
@@ -53,18 +53,15 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 	}; !reflect.DeepEqual(got.Status, want) {
 		t.Fatalf("status = %#v, want %#v", got.Status, want)
 	}
-	kinds := []presentation.Operation{got.Entries[0].Operation, got.Entries[1].Operation, got.Entries[2].Operation, got.Entries[3].Operation}
-	if want := []presentation.Operation{presentation.Replace, presentation.Replace, presentation.Append, presentation.Append}; !reflect.DeepEqual(kinds, want) {
+	kinds := []presentation.Operation{got.Entries[0].Operation, got.Entries[1].Operation}
+	if want := []presentation.Operation{presentation.Append, presentation.Append}; !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("operations = %#v, want %#v", kinds, want)
 	}
-	body := got.Entries[0].Text + "\n" + got.Entries[1].Text
-	for _, value := range []string{"[Room]", "A room.", "Exits: north, east", "Right: sword", "Spell: Fire Ball"} {
-		if !strings.Contains(body, value) {
-			t.Fatalf("projection omitted %q from %q", value, body)
-		}
+	if got.Location.Title != "[Room]" || !reflect.DeepEqual(got.Location.Exits, []string{"north", "east"}) || got.Hands.Right != "sword" || got.Hands.PreparedSpell != "Fire Ball" {
+		t.Fatalf("semantic projection = %#v %#v", got.Location, got.Hands)
 	}
-	if !strings.Contains(got.Map, "@ #1 [Room]") {
-		t.Fatalf("map projection = %q", got.Map)
+	if !strings.Contains(strings.Join(got.Map.Lines, "\n"), "@") {
+		t.Fatalf("map projection = %v", got.Map.Lines)
 	}
 	for _, entry := range got.Entries {
 		if entry.Text == "duplicate" {
@@ -97,7 +94,7 @@ func TestClientSanitizesNoticesAndVisibleFields(t *testing.T) {
 	if !ok {
 		t.Fatal("Next closed unexpectedly")
 	}
-	combined := got.Title + got.Prompt + got.Character
+	combined := got.Location.Title + got.Prompt + got.Character
 	for _, notice := range got.Notices {
 		combined += notice.Text
 		if strings.ContainsAny(notice.Text, "\n\t") {
@@ -149,8 +146,8 @@ func TestClientFeedsMapperSuccessfulCommandsOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("second update closed")
 	}
-	if !strings.Contains(got.Map, "│") {
-		t.Fatalf("successful movement did not add map edge:\n%s", got.Map)
+	if !strings.Contains(strings.Join(got.Map.Lines, "\n"), "│") {
+		t.Fatalf("successful movement did not add map edge:\n%v", got.Map.Lines)
 	}
 
 	source.err = errors.New("send failed")
@@ -162,8 +159,8 @@ func TestClientFeedsMapperSuccessfulCommandsOnly(t *testing.T) {
 	if !ok {
 		t.Fatal("third update closed")
 	}
-	if strings.Contains(got.Map, "#3") && strings.Contains(got.Map, "south") {
-		t.Fatalf("failed movement affected map:\n%s", got.Map)
+	if strings.Contains(strings.Join(got.Map.Lines, "\n"), "south") {
+		t.Fatalf("failed movement affected map:\n%v", got.Map.Lines)
 	}
 }
 

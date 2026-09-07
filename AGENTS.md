@@ -53,8 +53,9 @@ Keep `--no-log` in command help only. Do not document it in `README.md`,
    must not know XML tags, SGE fields, endpoints, socket rules, or retry policy.
 6. `internal/mapper` owns learned map state, Genie-compatible map XML, room
    matching, graph edges, persistence, and terminal map rendering. The presenter
-   feeds it sanitized room snapshots and successful commands. The UI only
-   toggles between the Room projection and pane-ready map text.
+   feeds it sanitized room snapshots and successful commands. The UI consumes
+   the pane-ready map text with semantic dashboard state, then owns automatic
+   map visibility and local crop/pan presentation.
 7. `internal/agent` builds `/responses` requests, parses the strict
    `send_command` result, and returns replacement history. The UI owns accepted
    history, prompt and whisper wakeups, recent sanitized game context,

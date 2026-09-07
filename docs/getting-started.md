@@ -40,22 +40,25 @@ Run the client again:
 dr-charm
 ```
 
-The status bar starts at `CONNECTING`. Wait for it to show `READY`, type
-`look` in the Input pane, and press Enter. The Game pane shows the response.
+The dashboard starts at `CONNECTING`. Wait for it to show `READY`, type `look`,
+and press Enter. The response appears above the dashboard in terminal
+scrollback.
 
 ## Use the interface
 
-Type a DragonRealms command in the Input pane and press Enter to send it. Up
-and Down recall commands from this session.
+Type a DragonRealms command on the input line and press Enter to send it. Up
+and Down recall commands from this session. The dashboard shows your location,
+exits, left and right hands, and a prepared spell when one is ready. Familiar
+messages join the transcript with a `[familiar]` label.
 
-Press Tab to focus the Input pane or a visible Game, Room, Hands, or Familiar
-pane. Use Page Up and Page Down to scroll the focused output pane. Shift-Tab
-moves focus in reverse.
+The learned map appears automatically when the terminal has enough space. Press
+Escape to navigate a visible map. Use `h` and `l` to pan horizontally, `j` and
+`k` to pan vertically, Ctrl-U and Ctrl-D for half-screen movement, and `g` or
+`G` for the top or bottom. Press Tab or Escape to return to command entry.
 
-Press F5 to switch the Room pane between room details and the learned map.
-
-Press F1 to open the control list. Press Escape to leave help, then press
-Ctrl-C when you want to quit.
+Press F1 to open the control list, F3 to select a theme, F4 to toggle session
+logging, and F6 to toggle auto mode. Press Escape to leave help or the theme
+selector. Press Ctrl-C when you want to quit.
 
 ## Next steps
 

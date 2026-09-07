@@ -68,8 +68,8 @@ from endpoint defaults.
 
 ### Request contents
 
-Every model request sends recent text from the Game and Familiar panes to the
-configured endpoint. Action requests also include:
+Every model request sends recent game and familiar text from the terminal
+transcript to the configured endpoint. Action requests also include:
 
 - fixed instructions and a short DragonRealms command reference
 - the configured `agent.character` instructions
@@ -91,8 +91,8 @@ instructions before forwarding the request.
 | `AGENT error` | The last request failed. The next prompt or whisper tries again. |
 
 Auto mode starts off. F6 toggles it without making a request. When auto mode is
-on, Enter sends the Input pane text to the agent as a whisper instead of sending
-it to DragonRealms. The agent can reply or choose one command.
+on, Enter sends input-line text to the agent as a whisper instead of sending it
+to DragonRealms. The agent can reply or choose one command.
 
 A new prompt or whisper while the agent is thinking cancels the current request
 and replaces it after cancellation finishes. F6, a lost connection, quitting,
@@ -145,15 +145,16 @@ warning and leaves logging on when the new file is usable.
 ## Learned map
 
 `dr-charm` learns rooms as you move and saves them as Genie-compatible XML at
-the path above. Press F5 to switch the Room pane between room details and the
-learned map.
+the path above. The dashboard shows the map automatically when the terminal has
+enough space. Press Escape to navigate it, then press Tab or Escape to return
+to command entry.
 
 ## Custom themes
 
 The theme directory contains JSON files. `dr-charm` loads them at startup in
 filename order after the built-in `default`, `dark`, and `high-contrast`
 themes. F3 opens the theme list. Up and Down change the selection, and Enter
-returns to the game.
+returns to the dashboard.
 
 Color values use a quoted ANSI color number from `0` through `255` or a hex
 color in `#RGB` or `#RRGGBB` form.
@@ -177,12 +178,12 @@ Each file contains one flat JSON object:
 |---|---|
 | `name` | Theme name. This is the only required value. |
 | `foreground` | Text color. |
-| `border` | Pane border color. |
-| `title_bar` | Title color. |
-| `status_bar` | Status text color. |
-| `status_bar_bg` | Status background color. |
-| `border_type` | `normal`, `hidden`, `thick`, `double`, or `rounded`. |
-| `padding` | Space inside pane borders. |
+| `border` | Accepted for compatibility; native scrollback does not render pane borders. |
+| `title_bar` | Accepted for compatibility; native scrollback has no title bar. |
+| `status_bar` | Accepted for compatibility; native scrollback uses `foreground` for the footer. |
+| `status_bar_bg` | Accepted for compatibility; native scrollback has no footer background. |
+| `border_type` | Accepted for compatibility; native scrollback does not render borders. |
+| `padding` | Accepted for compatibility; native scrollback does not render pane padding. |
 
 An empty or unknown `border_type` uses a rounded border. `dr-charm` warns and
 skips a file with an unknown key, more than one JSON value, or an empty `name`.

@@ -1,8 +1,8 @@
 # dr-charm
 
 `dr-charm` is a terminal client for DragonRealms. Sign in with an
-existing DragonRealms account and character, then play in a full-screen
-terminal interface.
+existing DragonRealms account and character, then play in a terminal interface.
+Game output stays in your terminal's native scrollback.
 
 The client supports DragonRealms only.
 
@@ -64,9 +64,10 @@ character: YOUR_CHARACTER_NAME
 
 The client records game output and commands in a session log.
 
-Run `dr-charm` again. Wait for the status bar to show `READY`, type `look`, and
-press Enter. Press F5 to switch the Room pane to the learned map. Press F1 for
-the controls and Ctrl-C to quit.
+Run `dr-charm` again. Wait for the dashboard to show `READY`, type `look`, and
+press Enter. Game output appears above the dashboard in terminal scrollback.
+The learned map appears automatically when the terminal has room for it. Press
+F1 for the controls and Ctrl-C to quit.
 
 ## Optional auto mode
 

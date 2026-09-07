@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"dr-charm/internal/agent"
@@ -18,16 +17,6 @@ import (
 	"dr-charm/internal/telemetry"
 	"dr-charm/internal/terminaltext"
 )
-
-const (
-	paneInput    = "input"
-	paneMain     = "main"
-	paneRoom     = "room"
-	paneHands    = "hands"
-	paneFamiliar = "familiar"
-)
-
-var paneOrder = [...]string{paneMain, paneRoom, paneHands, paneFamiliar}
 
 type gameSession interface {
 	Send(string) error
@@ -50,34 +39,29 @@ type EnhancedModel struct {
 	triggers  *automation.TriggerManager
 	now       func() time.Time
 
-	width, height        int
-	quitting, sourceDone bool
-	viewMode             ViewMode
+	width, height            int
+	dimensionsReceived       bool
+	quitting, sourceDone     bool
+	viewMode                 ViewMode
+	mapNavigation            bool
+	mapPanLine, mapPanColumn int
+	mapToken                 string
+	modalOffset              int
+	pendingTranscript        []string
+	drainScheduled           bool
 
 	input        textinput.Model
 	history      []string
 	historyIndex int
 
-	layout         layout
 	themes         *themeCatalog
 	logger         transcriptLogger
 	loggingAllowed bool
 	logState       logState
 	logMessage     string
 
-	mainOutput     []string
-	roomOutput     []string
-	mapOutput      []string
-	handsOutput    []string
-	familiarOutput []string
-	mainViewport   viewport.Model
-	roomViewport   viewport.Model
-	handsViewport  viewport.Model
-	familiarView   viewport.Model
-	activePane     string
-	unread         map[string]bool
-	showMap        bool
-	agent          agentState
+	mapOutput []string
+	agent     agentState
 }
 
 type Options struct {
@@ -102,7 +86,6 @@ type ViewMode int
 
 const (
 	ViewModeSingle ViewMode = iota
-	ViewModeMulti
 	ViewModeHelp
 	ViewModeTheme
 )
@@ -117,15 +100,6 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 	input.CharLimit = 4096
 	input.SetWidth(70)
 	_ = input.Focus()
-	main := viewport.New(viewport.WithWidth(50), viewport.WithHeight(10))
-	main.SoftWrap = true
-	room := viewport.New(viewport.WithWidth(20), viewport.WithHeight(5))
-	room.SoftWrap = true
-	hands := viewport.New(viewport.WithWidth(20), viewport.WithHeight(3))
-	hands.SoftWrap = true
-	familiar := viewport.New(viewport.WithWidth(20), viewport.WithHeight(3))
-	familiar.SoftWrap = true
-
 	m := EnhancedModel{
 		session:        session,
 		character:      options.Character,
@@ -134,20 +108,12 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 		now:            time.Now,
 		width:          80,
 		height:         24,
-		viewMode:       ViewModeMulti,
+		viewMode:       ViewModeSingle,
 		input:          input,
-		layout:         newLayout(),
 		themes:         newThemeCatalog(options.ThemeDir),
 		logger:         telemetry.NewLogger(options.LogDir),
 		loggingAllowed: options.Logging,
 		logState:       logOff,
-		mainOutput:     []string{"Connecting to DragonRealms"},
-		mainViewport:   main,
-		roomViewport:   room,
-		handsViewport:  hands,
-		familiarView:   familiar,
-		activePane:     paneInput,
-		unread:         map[string]bool{},
 		agent:          agentState{ctx: options.Context},
 	}
 	if options.Agent != nil {
@@ -156,8 +122,6 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 	for _, warning := range m.themes.warnings {
 		m.appendSystem("theme warning: " + terminaltext.Sanitize(warning.Error()))
 	}
-	m.resizePanes()
-	m.refreshAllPanes(true)
 	if m.loggingAllowed {
 		m.startLogging()
 	}
@@ -170,6 +134,10 @@ func (m EnhancedModel) Init() tea.Cmd {
 	return tea.Batch(cmd, waitForSessionUpdate(m.session))
 }
 
+type transcriptDrainMsg struct{}
+
+func nextTranscriptDrain() tea.Cmd { return func() tea.Msg { return transcriptDrainMsg{} } }
+
 // Update applies terminal input or one detached Session update.
 func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
@@ -178,36 +146,41 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = message.Width
 		m.height = message.Height
-		m.resizePanes()
-		m.refreshAllPanes(false)
-		return m, nil
-	case tea.MouseWheelMsg:
-		if message.Button == tea.MouseWheelUp {
-			m.scrollActivePageUp()
+		m.dimensionsReceived = true
+		m.input.SetWidth(max(message.Width-2, 1))
+		return m, m.scheduleTranscript()
+	case transcriptDrainMsg:
+		if len(m.pendingTranscript) == 0 {
+			m.drainScheduled = false
+			if m.quitting {
+				return m, tea.Quit
+			}
+			return m, nil
 		}
-		if message.Button == tea.MouseWheelDown {
-			m.scrollActivePageDown()
-		}
-		return m, nil
+		record := m.pendingTranscript[0]
+		m.pendingTranscript = m.pendingTranscript[1:]
+		return m, tea.Sequence(tea.Println(printableRecord(record)), nextTranscriptDrain())
 	case presentation.Update:
 		wasReady := m.snapshot.Connection == presentation.Ready
 		m.applySessionUpdate(message)
 		if wasReady && message.Connection != presentation.Ready {
 			m.cancelAgent()
 		}
-		if m.sourceDone {
-			return m, nil
-		}
 		wait := waitForSessionUpdate(m.session)
-		if message.Prompted && message.Connection == presentation.Ready {
-			return m, tea.Batch(m.wakeAgent(), wait)
+		emit := m.scheduleTranscript()
+		if m.sourceDone {
+			return m, emit
 		}
-		return m, wait
+		if message.Prompted && message.Connection == presentation.Ready {
+			return m, tea.Sequence(emit, m.wakeAgent(), wait)
+		}
+		return m, tea.Sequence(emit, wait)
 	case agentResultMsg:
-		return m, m.handleAgentResult(message)
+		follow := m.handleAgentResult(message)
+		return m, tea.Sequence(m.scheduleTranscript(), follow)
 	case editorFinishedMsg:
 		m.finishEditor(message)
-		return m, nil
+		return m, m.scheduleTranscript()
 	case sessionClosedMsg:
 		m.cancelAgent()
 		m.sourceDone = true
@@ -216,9 +189,9 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if err := m.stopLogging(); err != nil {
 			m.appendSystem("logging failed: " + terminaltext.Sanitize(err.Error()))
 		}
-		return m, nil
+		return m, m.scheduleTranscript()
 	}
-	if m.viewMode == ViewModeHelp || m.viewMode == ViewModeTheme {
+	if m.viewMode == ViewModeHelp || m.viewMode == ViewModeTheme || m.mapNavigation {
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -232,15 +205,22 @@ func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {
 	if update.Connection != previousConnection {
 		m.appendSystem("connection: " + connectionText(update.Connection))
 	}
-	if update.Map != "" {
-		m.replaceMap(splitLines(update.Map))
+	if len(update.Map.Lines) > 0 {
+		m.mapOutput = append([]string(nil), update.Map.Lines...)
+		if update.Map.CurrentToken != "" && update.Map.CurrentToken != m.mapToken {
+			m.mapToken = update.Map.CurrentToken
+			m.mapPanLine, m.mapPanColumn = update.Map.CurrentLine, update.Map.CurrentColumn
+		}
 	}
 	for _, entry := range update.Entries {
 		switch entry.Operation {
 		case presentation.Clear:
-			m.replacePane(paneName(entry.Pane), nil)
+			continue
 		case presentation.Replace:
-			m.replacePane(paneName(entry.Pane), splitLines(entry.Text))
+			if strings.TrimSpace(entry.Text) == "" {
+				continue
+			}
+			fallthrough
 		default:
 			text := entry.Text
 			if entry.Pane == presentation.Game || entry.Pane == presentation.Familiar {
@@ -248,7 +228,10 @@ func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {
 				m.writeLog(entry.Text)
 				text = m.highlightText(text)
 			}
-			m.appendPane(paneName(entry.Pane), text)
+			if entry.Pane == presentation.Familiar {
+				text = "[familiar] " + text
+			}
+			m.enqueueTranscript(text)
 		}
 	}
 	for _, notice := range update.Notices {
@@ -264,7 +247,10 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 		if err := m.stopLogging(); err != nil {
 			m.appendSystem("logging failed: " + terminaltext.Sanitize(err.Error()))
 		}
-		return m, tea.Quit
+		if len(m.pendingTranscript) == 0 && !m.drainScheduled {
+			return m, tea.Quit
+		}
+		return m, m.scheduleTranscript()
 	case message.Code == 'g' && message.Mod == tea.ModCtrl:
 		return m, m.openEditor()
 	}
@@ -272,35 +258,48 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 	switch message.Code {
 	case tea.KeyF1:
 		m.viewMode = ViewModeHelp
-		return m, nil
-	case tea.KeyF2:
-		if m.viewMode == ViewModeSingle {
-			m.viewMode = ViewModeMulti
-		} else {
-			m.viewMode = ViewModeSingle
-			m.activePane = paneInput
-		}
+		m.modalOffset = 0
 		return m, nil
 	case tea.KeyF3:
 		m.viewMode = ViewModeTheme
+		m.modalOffset = 0
 		return m, nil
 	case tea.KeyF4:
 		m.toggleLogging()
-		return m, nil
-	case tea.KeyF5:
-		m.toggleMap()
 		return m, nil
 	case tea.KeyF6:
 		m.toggleAgent()
 		return m, nil
 	case tea.KeyTab:
-		if m.viewMode == ViewModeMulti {
-			m.cyclePane(!message.Mod.Contains(tea.ModShift))
-		}
+		m.mapNavigation = false
 		return m, nil
 	}
 
 	if m.viewMode == ViewModeHelp {
+		if message.Code == tea.KeyUp || message.Code == 'k' {
+			m.modalOffset = max(0, m.modalOffset-1)
+			return m, nil
+		}
+		if message.Code == tea.KeyDown || message.Code == 'j' {
+			m.modalOffset++
+			return m, nil
+		}
+		if message.Code == 'u' && message.Mod == tea.ModCtrl {
+			m.modalOffset = max(0, m.modalOffset-m.modalRows()/2)
+			return m, nil
+		}
+		if message.Code == 'd' && message.Mod == tea.ModCtrl {
+			m.modalOffset += m.modalRows() / 2
+			return m, nil
+		}
+		if message.Code == 'g' {
+			m.modalOffset = 0
+			return m, nil
+		}
+		if message.Code == 'G' {
+			m.modalOffset = 1 << 30
+			return m, nil
+		}
 		if message.Code == tea.KeyEscape {
 			m.viewMode = ViewModeSingle
 		}
@@ -308,6 +307,14 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 	}
 	if m.viewMode == ViewModeTheme {
 		return m.handleThemeKeys(message), nil
+	}
+	if message.Code == tea.KeyEscape && m.mapVisible() {
+		m.mapNavigation = true
+		return m, nil
+	}
+	if m.mapNavigation {
+		m.panMap(message)
+		return m, nil
 	}
 
 	switch message.Code {
@@ -322,29 +329,43 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 	case tea.KeyDown:
 		m.nextHistory()
 		return m, nil
-	case tea.KeyPgUp:
-		m.scrollActivePageUp()
-		return m, nil
-	case tea.KeyPgDown:
-		m.scrollActivePageDown()
-		return m, nil
-	case tea.KeyHome:
-		if m.activePane == paneInput {
-			break
-		}
-		m.activeViewport().GotoTop()
-		return m, nil
-	case tea.KeyEnd:
-		if m.activePane == paneInput {
-			break
-		}
-		m.activeViewport().GotoBottom()
-		return m, nil
 	}
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(message)
 	return m, cmd
+}
+
+func (m EnhancedModel) mapVisible() bool {
+	_, visible := dashboardRows(m.width, m.height, m.snapshot, m.buildStatusBar(), m.buildInput(), m.mapOutput, m.mapPanLine, m.mapPanColumn, m.mapNavigation)
+	return visible
+}
+
+func (m *EnhancedModel) panMap(message tea.KeyPressMsg) {
+	switch message.Code {
+	case tea.KeyEscape, tea.KeyTab:
+		m.mapNavigation = false
+	case 'h':
+		m.mapPanColumn = max(0, m.mapPanColumn-1)
+	case 'l':
+		m.mapPanColumn++
+	case 'j':
+		m.mapPanLine = min(len(m.mapOutput)-1, m.mapPanLine+1)
+	case 'k':
+		m.mapPanLine = max(0, m.mapPanLine-1)
+	case 'u':
+		if message.Mod == tea.ModCtrl {
+			m.mapPanLine = max(0, m.mapPanLine-max(1, m.height/4))
+		}
+	case 'd':
+		if message.Mod == tea.ModCtrl {
+			m.mapPanLine = min(len(m.mapOutput)-1, m.mapPanLine+max(1, m.height/4))
+		}
+	case 'g':
+		m.mapPanLine = 0
+	case 'G':
+		m.mapPanLine = max(0, len(m.mapOutput)-1)
+	}
 }
 
 func (m EnhancedModel) sendInput() (tea.Model, tea.Cmd) {
@@ -363,7 +384,7 @@ func (m *EnhancedModel) sendCommand(original, prefix string, remember bool) bool
 		return false
 	}
 	m.writeLog("> " + original)
-	m.appendPane(paneMain, prefix+original)
+	m.enqueueTranscript(prefix + original)
 	if remember {
 		m.history = append(m.history, original)
 		m.historyIndex = len(m.history)
@@ -378,6 +399,10 @@ func (m *EnhancedModel) highlightText(text string) string {
 		lines[index] = m.triggers.ProcessLine(lines[index])
 	}
 	return strings.Join(lines, "\n")
+}
+
+func splitLines(text string) []string {
+	return strings.Split(text, "\n")
 }
 
 func (m *EnhancedModel) previousHistory() {
@@ -403,10 +428,26 @@ func (m *EnhancedModel) nextHistory() {
 
 func (m EnhancedModel) handleThemeKeys(message tea.KeyPressMsg) EnhancedModel {
 	switch message.Code {
-	case tea.KeyUp:
+	case tea.KeyUp, 'k':
 		m.themes.previous()
-	case tea.KeyDown:
+	case tea.KeyDown, 'j':
 		m.themes.next()
+	case 'u':
+		if message.Mod == tea.ModCtrl {
+			for range max(1, m.modalRows()/2) {
+				m.themes.previous()
+			}
+		}
+	case 'd':
+		if message.Mod == tea.ModCtrl {
+			for range max(1, m.modalRows()/2) {
+				m.themes.next()
+			}
+		}
+	case 'g':
+		m.themes.currentIndex = 0
+	case 'G':
+		m.themes.currentIndex = len(m.themes.themes) - 1
 	case tea.KeyEnter, tea.KeyEscape:
 		m.viewMode = ViewModeSingle
 	}
@@ -418,195 +459,32 @@ func (m *EnhancedModel) appendSystem(text string) {
 	if now == nil {
 		now = time.Now
 	}
-	m.appendPane(paneMain, fmt.Sprintf("[system %s] %s", now().Format("15:04:05"), text))
+	m.enqueueTranscript(fmt.Sprintf("[system %s] %s", now().Format("15:04:05"), text))
 }
 
-func (m *EnhancedModel) appendPane(pane, text string) {
-	if pane == "" {
-		pane = paneMain
+func printableRecord(record string) string {
+	if record == "" {
+		return " "
 	}
-	wasActive := pane == m.activePane
-	wasBottom := m.viewportFor(pane).AtBottom()
-	lines := splitLines(text)
-	switch pane {
-	case paneFamiliar:
-		m.familiarOutput = appendCapped(m.familiarOutput, lines, 100)
-	default:
-		pane = paneMain
-		m.mainOutput = appendCapped(m.mainOutput, lines, 500)
-	}
-	m.refreshPanePreservingOffset(pane, wasBottom)
-	if !wasActive {
-		m.unread[pane] = true
-	}
+	return record
 }
 
-func (m *EnhancedModel) replacePane(pane string, lines []string) {
-	current := m.linesFor(pane)
-	if equalLines(current, lines) {
-		return
-	}
-	wasActive := pane == m.activePane
-	wasBottom := m.viewportFor(pane).AtBottom()
-	switch pane {
-	case paneFamiliar:
-		m.familiarOutput = append([]string(nil), lines...)
-	case paneRoom:
-		m.roomOutput = append([]string(nil), lines...)
-	case paneHands:
-		m.handsOutput = append([]string(nil), lines...)
-	default:
-		m.mainOutput = append([]string(nil), lines...)
-		pane = paneMain
-	}
-	m.refreshPanePreservingOffset(pane, wasBottom)
-	if !wasActive {
-		m.unread[pane] = true
-	}
-	if pane == paneFamiliar && !familiarAvailable(m.familiarOutput) && m.activePane == paneFamiliar {
-		m.activePane = paneMain
-	}
-	if !containsPane(m.focusablePanes(), m.activePane) {
-		m.activePane = paneInput
-	}
+func (m *EnhancedModel) enqueueTranscript(record string) {
+	m.pendingTranscript = append(m.pendingTranscript, record)
 }
 
-func (m *EnhancedModel) refreshPane(pane string, forceBottom bool) {
-	v := m.viewportFor(pane)
-	atBottom := v.AtBottom()
-	v.SetContentLines(m.linesFor(pane))
-	if forceBottom || atBottom {
-		v.GotoBottom()
+func (m *EnhancedModel) scheduleTranscript() tea.Cmd {
+	if m.drainScheduled || len(m.pendingTranscript) == 0 || (!m.dimensionsReceived && !m.quitting) {
+		return nil
 	}
-}
-
-func (m *EnhancedModel) refreshPanePreservingOffset(pane string, forceBottom bool) {
-	v := m.viewportFor(pane)
-	atBottom := v.AtBottom()
-	v.SetContentLines(m.linesFor(pane))
-	if forceBottom || atBottom {
-		v.GotoBottom()
-	}
-}
-
-func (m *EnhancedModel) refreshAllPanes(forceBottom bool) {
-	for _, pane := range paneOrder {
-		if pane == paneFamiliar && !familiarAvailable(m.familiarOutput) {
-			continue
-		}
-		m.refreshPane(pane, forceBottom)
-	}
-}
-
-func (m *EnhancedModel) resizePanes() {
-	layoutHeight := max(m.height-7, 10)
-	leftWidth := int(float64(m.width) * 0.7)
-	rightWidth := max(m.width-leftWidth-1, 10)
-	mainWidth := max(leftWidth-4, 1)
-	rightContentWidth := max(rightWidth-4, 1)
-	roomHeight, handsHeight, familiarHeight := paneHeights(layoutHeight, familiarAvailable(m.familiarOutput))
-
-	m.mainViewport.SetWidth(mainWidth)
-	m.mainViewport.SetHeight(max(layoutHeight-4, 1))
-	m.roomViewport.SetWidth(rightContentWidth)
-	m.roomViewport.SetHeight(max(roomHeight-4, 1))
-	m.handsViewport.SetWidth(rightContentWidth)
-	m.handsViewport.SetHeight(max(handsHeight-4, 1))
-	m.familiarView.SetWidth(rightContentWidth)
-	m.familiarView.SetHeight(max(familiarHeight-4, 1))
-	m.input.SetWidth(max(m.width-8, 1))
-}
-
-func (m *EnhancedModel) cyclePane(forward bool) {
-	order := m.focusablePanes()
-	for index, pane := range order {
-		if pane == m.activePane {
-			next := index + 1
-			if !forward {
-				next = index - 1
-			}
-			if next < 0 {
-				next = len(order) - 1
-			}
-			m.activePane = order[next%len(order)]
-			m.unread[m.activePane] = false
-			return
-		}
-	}
-	m.activePane = paneMain
-}
-
-func (m EnhancedModel) focusablePanes() []string {
-	order := []string{paneInput, paneMain, paneRoom, paneHands}
-	if familiarAvailable(m.familiarOutput) {
-		order = append(order, paneFamiliar)
-	}
-	return order
-}
-
-func containsPane(panes []string, pane string) bool {
-	for _, candidate := range panes {
-		if candidate == pane {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *EnhancedModel) scrollActivePageUp() {
-	if m.activePane == paneInput {
-		return
-	}
-	m.activeViewport().PageUp()
-}
-
-func (m *EnhancedModel) scrollActivePageDown() {
-	if m.activePane == paneInput {
-		return
-	}
-	m.activeViewport().PageDown()
-	if m.activeViewport().AtBottom() {
-		m.unread[m.activePane] = false
-	}
-}
-
-func (m *EnhancedModel) activeViewport() *viewport.Model {
-	return m.viewportFor(m.activePane)
-}
-
-func (m *EnhancedModel) viewportFor(pane string) *viewport.Model {
-	switch pane {
-	case paneRoom:
-		return &m.roomViewport
-	case paneHands:
-		return &m.handsViewport
-	case paneFamiliar:
-		return &m.familiarView
-	default:
-		return &m.mainViewport
-	}
-}
-
-func (m EnhancedModel) linesFor(pane string) []string {
-	switch pane {
-	case paneRoom:
-		if m.showMap {
-			return m.mapOutput
-		}
-		return m.roomOutput
-	case paneHands:
-		return m.handsOutput
-	case paneFamiliar:
-		return m.familiarOutput
-	default:
-		return m.mainOutput
-	}
+	m.drainScheduled = true
+	return nextTranscriptDrain()
 }
 
 // View renders the current terminal screen.
 func (m EnhancedModel) View() tea.View {
 	if m.quitting {
-		return tea.NewView("Goodbye!\n")
+		return tea.NewView("")
 	}
 	var content string
 	switch m.viewMode {
@@ -614,81 +492,48 @@ func (m EnhancedModel) View() tea.View {
 		content = m.renderHelp()
 	case ViewModeTheme:
 		content = m.renderThemeSelector()
-	case ViewModeMulti:
-		content = m.renderMultiPane()
 	default:
-		content = m.renderSinglePane()
+		content = renderDashboard(m.width, m.height, m.snapshot, m.buildStatusBar(), m.buildInput(), m.mapOutput, m.mapPanLine, m.mapPanColumn, m.mapNavigation, m.themes.current())
 	}
-	v := tea.NewView(content)
-	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
-	v.OnMouse = func(msg tea.MouseMsg) tea.Cmd {
-		return func() tea.Msg { return msg }
-	}
-	return v
-}
-
-func (m EnhancedModel) renderSinglePane() string {
-	theme := m.themes.current()
-	outputHeight := max(m.height-8, 3)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.StatusBar)).Background(lipgloss.Color(theme.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
-	border := m.themes.borderStyle().Width(m.width - 2)
-	main := m.mainViewport
-	main.SetHeight(max(outputHeight-2, 1))
-	body := main.View()
-	return strings.Join([]string{title, status, border.Render(body), m.renderInputPane()}, "\n")
-}
-
-func (m EnhancedModel) renderMultiPane() string {
-	theme := m.themes.current()
-	layoutHeight := max(m.height-8, 10)
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(theme.TitleBar)).Align(lipgloss.Center).Width(m.width).Render(m.buildTitle())
-	status := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.StatusBar)).Background(lipgloss.Color(theme.StatusBarBg)).Padding(0, 1).Width(m.width).Render(m.buildStatusBar())
-	layout := lipgloss.NewStyle().MaxHeight(layoutHeight).Height(layoutHeight).Render(m.layout.render(m.width, layoutHeight, m.paneViews()))
-	return strings.Join([]string{title, status, layout, m.renderInputPane()}, "\n")
+	return tea.NewView(content)
 }
 
 func (m EnhancedModel) renderHelp() string {
-	text := `DragonRealms Charm - Help
-
-F1          Show this help
-F2          Toggle multi/single-pane view
-F3          Select theme
-F4          Toggle logging
-F5          Toggle Room/Map pane
-F6          Toggle auto mode
-Tab         Cycle input and visible panes
-PgUp/PgDn   Scroll active pane
-Home/End    Jump active pane
-Up/Down     Command history
-Ctrl-G      Edit input in $VISUAL or $EDITOR
-Ctrl-C      Quit
-
-Press ESC to return`
-	return lipgloss.NewStyle().Padding(2).Width(m.width).Height(m.height).Foreground(lipgloss.Color(m.themes.current().Foreground)).Render(text)
+	return m.renderModal([]string{"Help", "F1  help", "F3  theme", "F4  logging", "F6  auto mode", "Esc map navigation", "Tab/Esc input focus", "h/j/k/l map pan", "Ctrl-U/D map pan", "g/G map top/bottom", "Up/Down command history", "Ctrl-G edit input", "Ctrl-C quit", "Esc close"}, m.modalOffset)
 }
 
 func (m EnhancedModel) renderThemeSelector() string {
-	var content strings.Builder
-	content.WriteString("Select Theme (Up/Down, Enter, ESC)\n\n")
+	lines := []string{"Theme  Up/Down select  Enter/Esc close"}
 	current := m.themes.current().Name
 	for _, name := range m.themes.names() {
 		prefix := "    "
 		if name == current {
 			prefix = "  > "
 		}
-		fmt.Fprintf(&content, "%s%s\n", prefix, name)
+		lines = append(lines, prefix+name)
 	}
-	return lipgloss.NewStyle().Padding(2).Width(m.width).Height(m.height).Foreground(lipgloss.Color(m.themes.current().Foreground)).Render(content.String())
+	return m.renderModal(lines, themeOffset(lines, current, m.modalRows()))
 }
 
-func (m EnhancedModel) buildTitle() string {
-	title := "DragonRealms"
-	if m.snapshot.Title != "" {
-		title += " " + m.snapshot.Title
+func (m EnhancedModel) modalRows() int {
+	footer := renderDashboard(m.width, m.height, m.snapshot, m.buildStatusBar(), m.buildInput(), m.mapOutput, m.mapPanLine, m.mapPanColumn, m.mapNavigation, m.themes.current())
+	return max(1, len(strings.Split(footer, "\n")))
+}
+
+func (m EnhancedModel) renderModal(lines []string, offset int) string {
+	rows := m.modalRows()
+	offset = min(max(offset, 0), max(0, len(lines)-rows))
+	visible := lines[offset:min(len(lines), offset+rows)]
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.themes.current().Foreground)).Width(m.width).Height(rows).Render(strings.Join(visible, "\n"))
+}
+
+func themeOffset(lines []string, current string, rows int) int {
+	for index, line := range lines {
+		if strings.Contains(line, "> "+current) {
+			return min(max(0, index-rows+1), max(0, len(lines)-rows))
+		}
 	}
-	return title
+	return 0
 }
 
 func (m EnhancedModel) buildStatusBar() string {
@@ -721,31 +566,6 @@ func (m EnhancedModel) buildInput() string {
 	}
 	m.input.Prompt = prompt + " "
 	return m.input.View()
-}
-
-func (m EnhancedModel) renderInputPane() string {
-	title := "Input"
-	if m.agent.enabled {
-		title = "Whisper"
-	}
-	style := m.themes.borderStyle().Width(m.width - 2)
-	if m.activePane == paneInput {
-		title = "> " + title
-	}
-	return style.Render(title + "\n" + m.buildInput())
-}
-
-func (m EnhancedModel) paneViews() paneViews {
-	roomTitle := "Room"
-	if m.showMap {
-		roomTitle = "Map"
-	}
-	return paneViews{
-		main:     paneView{title: "Game", body: m.mainViewport.View(), active: m.activePane == paneMain, unread: m.unread[paneMain]},
-		room:     paneView{title: roomTitle, body: m.roomViewport.View(), active: m.activePane == paneRoom, unread: m.unread[paneRoom]},
-		hands:    paneView{title: "Hands", body: m.handsViewport.View(), active: m.activePane == paneHands, unread: m.unread[paneHands]},
-		familiar: paneView{title: "Familiar", body: m.familiarView.View(), active: m.activePane == paneFamiliar, unread: m.unread[paneFamiliar], visible: familiarAvailable(m.familiarOutput)},
-	}
 }
 
 // Close flushes UI-owned resources after Bubble Tea restores the terminal.
@@ -826,27 +646,6 @@ func (m *EnhancedModel) toggleLogging() {
 	m.startLogging()
 }
 
-func (m *EnhancedModel) toggleMap() {
-	m.showMap = !m.showMap
-	m.refreshPane(paneRoom, true)
-	m.unread[paneRoom] = false
-}
-
-func (m *EnhancedModel) replaceMap(lines []string) {
-	if equalLines(m.mapOutput, lines) {
-		return
-	}
-	wasActive := m.activePane == paneRoom
-	wasBottom := m.roomViewport.AtBottom()
-	m.mapOutput = append([]string(nil), lines...)
-	if m.showMap {
-		m.refreshPanePreservingOffset(paneRoom, wasBottom)
-		if !wasActive {
-			m.unread[paneRoom] = true
-		}
-	}
-}
-
 func connectionText(state presentation.ConnectionState) string {
 	switch state {
 	case presentation.Ready:
@@ -858,46 +657,6 @@ func connectionText(state presentation.ConnectionState) string {
 	default:
 		return "CONNECTING"
 	}
-}
-
-func paneName(pane presentation.PaneID) string {
-	switch pane {
-	case presentation.Familiar:
-		return paneFamiliar
-	case presentation.RoomPane:
-		return paneRoom
-	case presentation.HandsPane:
-		return paneHands
-	default:
-		return paneMain
-	}
-}
-
-func appendCapped(existing, lines []string, limit int) []string {
-	out := append(existing, lines...)
-	if len(out) > limit {
-		out = append([]string(nil), out[len(out)-limit:]...)
-	}
-	return out
-}
-
-func splitLines(text string) []string {
-	if text == "" {
-		return nil
-	}
-	return strings.Split(text, "\n")
-}
-
-func equalLines(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for index := range a {
-		if a[index] != b[index] {
-			return false
-		}
-	}
-	return true
 }
 
 type sessionClosedMsg struct{}

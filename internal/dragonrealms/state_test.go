@@ -555,3 +555,43 @@ func TestNewsEntryPrefixesClearStaleCategory(t *testing.T) {
 		}
 	}
 }
+
+func TestReducerMarksRoomObservationOnlyAtPrompt(t *testing.T) {
+	r := newReducer("Hero")
+	update, ok := r.apply(protocolAction{events: []protocolEvent{{kind: eventComponent, name: "room title", value: "[Room]"}, {kind: eventComponent, name: "room desc", value: "Description"}}})
+	if ok || update.RoomObserved {
+		t.Fatalf("room components published early: %#v", update)
+	}
+	update, ok = r.apply(protocolAction{events: []protocolEvent{{kind: eventPrompt, value: ">"}}})
+	if !ok || !update.RoomObserved || update.Snapshot.Room.Title != "[Room]" {
+		t.Fatalf("prompt observation = %#v ok=%v", update, ok)
+	}
+	update, ok = r.apply(protocolAction{events: []protocolEvent{{kind: eventPrompt, value: ">"}}})
+	if !ok || update.RoomObserved {
+		t.Fatalf("bare prompt replayed observation: %#v", update)
+	}
+}
+
+func TestReducerRoomObservationFollowsDecoderActionsAcrossSplitRooms(t *testing.T) {
+	input := "<component id='room title'>[One]</component><component id='room desc'>first</component><prompt time='1'>&gt;</prompt>text<component id='room title'>[Two]</component><component id='room exits'><d>north</d></component><prompt time='2'>&gt;</prompt>"
+	decoder := newStreamDecoder()
+	reducer := newReducer("Hero")
+	var observed []Update
+	for _, chunk := range [][]byte{[]byte(input[:37]), []byte(input[37:91]), []byte(input[91:])} {
+		for _, action := range decoder.feed(chunk) {
+			if update, published := reducer.apply(action); published && update.Prompted {
+				observed = append(observed, update)
+			}
+		}
+	}
+	if len(observed) != 2 || !observed[0].RoomObserved || !observed[1].RoomObserved || observed[0].Snapshot.Room.Title != "[One]" || observed[1].Snapshot.Room.Title != "[Two]" {
+		t.Fatalf("observations = %#v", observed)
+	}
+	if update, published := reducer.apply(protocolAction{events: []protocolEvent{{kind: eventPrompt, value: ">"}}}); !published || update.RoomObserved {
+		t.Fatalf("bare prompt = %#v published=%v", update, published)
+	}
+	reducer.resetTransient("Hero")
+	if update, published := reducer.apply(protocolAction{events: []protocolEvent{{kind: eventPrompt, value: ">"}}}); !published || update.RoomObserved {
+		t.Fatalf("reset prompt = %#v published=%v", update, published)
+	}
+}

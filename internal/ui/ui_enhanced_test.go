@@ -2,7 +2,6 @@ package ui
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,332 +9,68 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"dr-charm/internal/presentation"
 	"dr-charm/internal/telemetry"
 )
 
-func TestEnhancedModelConsumesPresentationUpdatesAndKeepsClosedSourceVisible(t *testing.T) {
-	session := &fakeSession{updates: make(chan presentation.Update, 2)}
-	session.updates <- presentation.Update{
-		Connection: presentation.Ready,
-		Title:      "[First]",
-		Prompt:     ">",
-		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "first", Operation: presentation.Append}},
-	}
-	session.updates <- presentation.Update{
-		Connection: presentation.Ready,
-		Title:      "[Second]",
-		Prompt:     ">",
-		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "second", Operation: presentation.Append}},
-	}
-	close(session.updates)
-
-	model := newTestModel(t, session, false)
-	cmd := waitForSessionUpdate(session)
-	for range 2 {
-		msg := cmd()
-		updated, next := model.Update(msg)
-		model = updated.(EnhancedModel)
-		cmd = next
-	}
-	if model.snapshot.Title != "[Second]" || !strings.Contains(model.View().Content, "second") {
-		t.Fatalf("model did not apply updates: %#v\n%s", model.snapshot, model.View().Content)
-	}
-	updated, next := model.Update(cmd())
-	model = updated.(EnhancedModel)
-	if next != nil || !model.sourceDone || model.quitting {
-		t.Fatalf("closed source state: next=%v sourceDone=%v quitting=%v", next, model.sourceDone, model.quitting)
-	}
-	view := model.View().Content
-	if !strings.Contains(view, "DISCONNECTED") || !strings.Contains(view, "[system 01:02:03] disconnected") {
-		t.Fatalf("closed source not visible: %q", view)
-	}
+type fakeSession struct {
+	updates chan presentation.Update
+	sent    []string
+	err     error
 }
 
-func TestEnhancedModelSendsOriginalCommandAndLogsAfterSuccess(t *testing.T) {
-	logDir := t.TempDir()
+func (s *fakeSession) Send(value string) error           { s.sent = append(s.sent, value); return s.err }
+func (s *fakeSession) Next() (presentation.Update, bool) { value, ok := <-s.updates; return value, ok }
+
+func newTestModel(t *testing.T, session *fakeSession) EnhancedModel {
+	t.Helper()
+	model := InitialEnhancedModel(session, Options{})
+	model.now = func() time.Time { return time.Date(2026, 1, 1, 1, 2, 3, 0, time.UTC) }
+	return model
+}
+
+func TestEnhancedModelCommandHistoryAndFailedSend(t *testing.T) {
 	session := &fakeSession{updates: make(chan presentation.Update)}
-	model := newTestModelWithLogDir(t, session, logDir, true)
-	model.Init()
-	model.input.SetValue(" l at target ")
-
-	updated, _ := model.Update(key(tea.KeyEnter))
-	model = updated.(EnhancedModel)
-	if got := session.sent; len(got) != 1 || got[0] != "look at target" {
-		t.Fatalf("sent=%#v", got)
-	}
-	if !strings.Contains(strings.Join(model.mainOutput, "\n"), ">  l at target ") {
-		t.Fatalf("command echo missing: %#v", model.mainOutput)
-	}
-	if err := model.logger.Stop(); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(logDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("log entries=%d", len(entries))
-	}
-	data, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if text := string(data); !strings.Contains(text, ">  l at target ") {
-		t.Fatalf("command log=%q", text)
-	}
-
-	session.err = errors.New("send failed")
-	model.input.SetValue("north")
-	updated, _ = model.Update(key(tea.KeyEnter))
-	model = updated.(EnhancedModel)
-	if got := session.sent; len(got) != 2 {
-		t.Fatalf("send error did not call session: %#v", got)
-	}
-	if strings.Contains(strings.Join(model.mainOutput, "\n"), "> north") {
-		t.Fatalf("failed command was echoed: %#v", model.mainOutput)
-	}
-}
-
-func TestEnhancedModelOwnsAliasesAndHighlights(t *testing.T) {
-	useANSI256(t)
-	session := &fakeSession{updates: make(chan presentation.Update)}
-	model := newTestModel(t, session, false)
-	model.input.SetValue("n")
-
-	updated, _ := model.Update(key(tea.KeyEnter))
-	model = updated.(EnhancedModel)
-	if got := session.sent; len(got) != 1 || got[0] != "north" {
-		t.Fatalf("sent=%#v", got)
-	}
-
-	model.applySessionUpdate(presentation.Update{
-		Connection: presentation.Ready,
-		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "Goblin just arrived.", Operation: presentation.Append}},
-	})
-	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "\x1b[") {
-		t.Fatalf("highlight not applied: %q", output)
-	}
-}
-
-func TestEnhancedModelReportsTranscriptWriteFailure(t *testing.T) {
-	logger := &fakeLogger{enabled: true, writeErr: errors.New("disk full"), stopErr: errors.New("sync failed")}
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
+	model := newTestModel(t, session)
+	logger := &recordingLogger{enabled: true}
 	model.logger = logger
-	model.logState = logOn
-
-	model.applySessionUpdate(presentation.Update{
-		Connection: presentation.Ready,
-		Entries:    []presentation.Entry{{Pane: presentation.Game, Text: "line", Operation: presentation.Append}},
-	})
-	if model.logState != logFailed || logger.stopCalls != 1 {
-		t.Fatalf("log state=%v stopCalls=%d", model.logState, logger.stopCalls)
-	}
-	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "logging failed: disk full (close failed: sync failed)") {
-		t.Fatalf("missing logging failure: %q", output)
-	}
-}
-
-func TestEnhancedModelRoutesPaneUpdatesFocusUnreadAndScroll(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 20
-	model.resizePanes()
-	lines := make([]string, 0, 30)
-	for i := range 30 {
-		lines = append(lines, "line-"+string(rune('A'+i%26)))
-	}
-	roomLines := make([]string, 0, 20)
-	for i := range 20 {
-		roomLines = append(roomLines, fmt.Sprintf("room-%02d", i))
-	}
-	model.applySessionUpdate(presentation.Update{
-		Connection: presentation.Ready,
-		Entries: []presentation.Entry{
-			{Pane: presentation.RoomPane, Text: strings.Join(roomLines, "\n"), Operation: presentation.Replace},
-			{Pane: presentation.HandsPane, Text: "Right: sword\nLeft: shield", Operation: presentation.Replace},
-			{Pane: presentation.Familiar, Text: "familiar", Operation: presentation.Append},
-			{Pane: presentation.Game, Text: strings.Join(lines, "\n"), Operation: presentation.Append},
-		},
-	})
-	if !model.unread[paneFamiliar] {
-		t.Fatal("inactive familiar pane was not marked unread")
-	}
-	updated, _ := model.Update(key(tea.KeyTab))
+	model.input.SetValue("n")
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	model = updated.(EnhancedModel)
-	if model.activePane != paneMain {
-		t.Fatalf("active pane=%q, want main", model.activePane)
+	if len(session.sent) != 1 || session.sent[0] != "north" || len(model.history) != 1 || model.history[0] != "n" || model.pendingTranscript[len(model.pendingTranscript)-1] != "> n" || len(logger.writes) != 1 || logger.writes[0] != "> n" {
+		t.Fatalf("successful command state: sent=%v history=%v queue=%v", session.sent, model.history, model.pendingTranscript)
 	}
-	updated, _ = model.Update(key(tea.KeyTab))
-	model = updated.(EnhancedModel)
-	if model.activePane != paneRoom {
-		t.Fatalf("active pane=%q, want room", model.activePane)
-	}
-	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	model = updated.(EnhancedModel)
-	if model.activePane != paneMain {
-		t.Fatalf("shift-tab active pane=%q", model.activePane)
-	}
-	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	model = updated.(EnhancedModel)
-	if model.activePane != paneInput {
-		t.Fatalf("second shift-tab active pane=%q, want input", model.activePane)
-	}
-	updated, _ = model.Update(key(tea.KeyTab))
-	model = updated.(EnhancedModel)
-	updated, _ = model.Update(key(tea.KeyTab))
-	model = updated.(EnhancedModel)
-	if !containsPane(model.focusablePanes(), paneHands) {
-		t.Fatalf("hands should be focusable when visible: %#v", model.focusablePanes())
-	}
-	updated, _ = model.Update(key(tea.KeyTab))
-	model = updated.(EnhancedModel)
-	if model.activePane != paneHands {
-		t.Fatalf("third tab active pane=%q, want hands", model.activePane)
-	}
-	model.replacePane(paneHands, strings.Split(strings.Repeat("hand\n", model.handsViewport.Height()+2), "\n"))
-	if !containsPane(model.focusablePanes(), paneHands) {
-		t.Fatalf("hands should be focusable when overflowing: %#v", model.focusablePanes())
-	}
-	model.activePane = paneFamiliar
-	model.replacePane(paneFamiliar, nil)
-	if model.activePane != paneMain {
-		t.Fatalf("optional pane disappearance did not restore game focus: %q", model.activePane)
-	}
-	before := model.roomViewport.YOffset()
-	model.activePane = paneRoom
-	updated, _ = model.Update(key(tea.KeyPgUp))
-	model = updated.(EnhancedModel)
-	if model.roomViewport.YOffset() > before {
-		t.Fatalf("room viewport moved the wrong way")
-	}
-	view := model.View()
-	if view.MouseMode != tea.MouseModeCellMotion || view.OnMouse == nil {
-		t.Fatalf("mouse mode = %v handler nil=%v", view.MouseMode, view.OnMouse == nil)
-	}
-	msg := view.OnMouse(tea.MouseWheelMsg{Button: tea.MouseWheelUp})()
-	if _, ok := msg.(tea.MouseWheelMsg); !ok {
-		t.Fatalf("mouse handler returned %T", msg)
-	}
-}
-
-func TestEnhancedModelFocusIncludesVisiblePanesAndSinglePaneScrollsGame(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 20
-	model.resizePanes()
-	model.replacePane(paneRoom, []string{"small room"})
-	model.appendPane(paneFamiliar, "familiar")
-	if !containsPane(model.focusablePanes(), paneInput) {
-		t.Fatalf("input should be focusable: %#v", model.focusablePanes())
-	}
-	if !containsPane(model.focusablePanes(), paneRoom) {
-		t.Fatalf("visible room should be focusable: %#v", model.focusablePanes())
-	}
-	updated, _ := model.Update(key(tea.KeyTab))
-	model = updated.(EnhancedModel)
-	if model.activePane != paneMain {
-		t.Fatalf("active pane=%q, want main", model.activePane)
-	}
-	updated, _ = model.Update(key(tea.KeyTab))
-	model = updated.(EnhancedModel)
-	if model.activePane != paneRoom {
-		t.Fatalf("active pane=%q, want room", model.activePane)
-	}
-	updated, _ = model.Update(key(tea.KeyF2))
-	model = updated.(EnhancedModel)
-	if model.viewMode != ViewModeSingle || model.activePane != paneInput {
-		t.Fatalf("single mode=%v active=%q", model.viewMode, model.activePane)
-	}
-}
-
-func TestEnhancedModelTogglesRoomSlotBetweenRoomAndMap(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 20
-	model.resizePanes()
-	model.applySessionUpdate(presentation.Update{
-		Connection: presentation.Ready,
-		Map:        "@ #1 [Town Square]\nExits: north",
-		Entries: []presentation.Entry{
-			{Pane: presentation.RoomPane, Text: "[Town Square]\n\nA room.", Operation: presentation.Replace},
-		},
-	})
-	if !strings.Contains(model.View().Content, "Room") || strings.Contains(model.View().Content, "@ #1 [Town Square]") {
-		t.Fatalf("default room view wrong:\n%s", model.View().Content)
-	}
-
-	updated, _ := model.Update(key(tea.KeyF5))
-	model = updated.(EnhancedModel)
-	if !model.showMap || !strings.Contains(model.View().Content, "Map") || !strings.Contains(model.View().Content, "@ #1 [Town Square]") {
-		t.Fatalf("map view wrong:\n%s", model.View().Content)
-	}
-
-	updated, _ = model.Update(key(tea.KeyF5))
-	model = updated.(EnhancedModel)
-	if model.showMap || !strings.Contains(model.View().Content, "A room.") {
-		t.Fatalf("room view not restored:\n%s", model.View().Content)
-	}
-}
-
-func TestEnhancedModelInputFocusKeepsCommandEditingKeys(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 20
-	model.resizePanes()
-	model.activePane = paneInput
-	model.input.Focus()
-	model.input.SetValue("look north")
-	model.input.SetCursor(4)
-
-	updated, _ := model.Update(key(tea.KeyEnd))
-	model = updated.(EnhancedModel)
-	if got := model.input.Position(); got != len("look north") {
-		t.Fatalf("end cursor=%d", got)
-	}
-
-	updated, _ = model.Update(key(tea.KeyHome))
-	model = updated.(EnhancedModel)
-	if got := model.input.Position(); got != 0 {
-		t.Fatalf("home cursor=%d", got)
-	}
-}
-
-func TestEnhancedModelInitialInputAcceptsTyping(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.Init()
-
-	updated, _ := model.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	model = updated.(EnhancedModel)
 	if got := model.input.Value(); got != "n" {
-		t.Fatalf("input value=%q, want n", got)
+		t.Fatalf("history up=%q, want n", got)
+	}
+	session.err = errors.New("closed")
+	model.input.SetValue("north")
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(EnhancedModel)
+	if len(session.sent) != 2 || len(model.history) != 1 || strings.Count(strings.Join(model.pendingTranscript, "\n"), "> north") != 0 || len(logger.writes) != 1 || !contains(model.pendingTranscript[len(model.pendingTranscript)-1], "send failed") {
+		t.Fatalf("failed command state: history=%v queue=%v", model.history, model.pendingTranscript)
 	}
 }
 
-func TestEnhancedModelPaste(t *testing.T) {
+func TestEnhancedModelPasteInsertsFlattenedRunesAndHonorsModalGuards(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		mode    ViewMode
-		pane    string
-		initial string
-		cursor  int
-		paste   string
-		want    string
+		name, initial, paste, want string
+		cursor                     int
+		mode                       ViewMode
 	}{
-		{name: "empty input", mode: ViewModeMulti, pane: paneInput, paste: "look", want: "look"},
-		{name: "at cursor", mode: ViewModeMulti, pane: paneInput, initial: "say  hello", cursor: 4, paste: "café", want: "say café hello"},
-		{name: "game pane active", mode: ViewModeMulti, pane: paneMain, paste: "look", want: "look"},
-		{name: "single pane", mode: ViewModeSingle, pane: paneInput, paste: "look", want: "look"},
-		{name: "multiline", mode: ViewModeMulti, pane: paneInput, paste: "look\nnorth\twest\n", want: "look north west "},
-		{name: "length limit", mode: ViewModeMulti, pane: paneInput, paste: strings.Repeat("界", 4097), want: strings.Repeat("界", 4096)},
-		{name: "help", mode: ViewModeHelp, pane: paneInput, initial: "draft", paste: "look", want: "draft"},
-		{name: "theme selection", mode: ViewModeTheme, pane: paneInput, initial: "draft", paste: "look", want: "draft"},
+		{name: "at Unicode cursor", initial: "say  hello", cursor: 4, paste: "café", want: "say café hello"},
+		{name: "newlines and tabs", paste: "look\nnorth\twest\n", want: "look north west "},
+		{name: "rune cap", paste: strings.Repeat("界", 4097), want: strings.Repeat("界", 4096)},
+		{name: "help", initial: "draft", paste: "look", want: "draft", mode: ViewModeHelp},
+		{name: "theme", initial: "draft", paste: "look", want: "draft", mode: ViewModeTheme},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			session := &fakeSession{updates: make(chan presentation.Update)}
-			model := newTestModel(t, session, false)
+			model := newTestModel(t, session)
 			model.viewMode = test.mode
-			model.activePane = test.pane
 			model.input.SetValue(test.initial)
 			model.input.SetCursor(test.cursor)
 
@@ -345,315 +80,330 @@ func TestEnhancedModelPaste(t *testing.T) {
 				t.Fatalf("pasted input=%q, want %q", got, test.want)
 			}
 			if len(session.sent) != 0 || len(model.history) != 0 {
-				t.Fatalf("paste submitted a command: sent=%v history=%v", session.sent, model.history)
+				t.Fatalf("paste submitted command: sent=%v history=%v", session.sent, model.history)
 			}
 		})
 	}
 }
 
-func TestEnhancedModelPageUpDoesNotClearUnread(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 18
-	model.resizePanes()
-	lines := make([]string, 0, 20)
-	for i := range 20 {
-		lines = append(lines, fmt.Sprintf("room-%02d", i))
+func TestEnhancedModelQueuesGameFamiliarDuplicateAndBlankRecords(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready, Entries: []presentation.Entry{{Pane: presentation.Game, Text: "one", Operation: presentation.Append}, {Pane: presentation.Game, Text: "one", Operation: presentation.Append}, {Pane: presentation.Game, Text: "", Operation: presentation.Append}, {Pane: presentation.Familiar, Text: "friend", Operation: presentation.Append}, {Pane: presentation.Game, Text: "ignored", Operation: presentation.Clear}}})
+	want := []string{"[system 01:02:03] connection: READY", "one", "one", "", "[familiar] friend"}
+	if len(model.pendingTranscript) != len(want) {
+		t.Fatalf("queue=%#v", model.pendingTranscript)
 	}
-	model.replacePane(paneRoom, lines)
-	model.unread[paneRoom] = true
-	model.activePane = paneRoom
-	model.roomViewport.GotoBottom()
-
-	updated, _ := model.Update(key(tea.KeyPgUp))
-	model = updated.(EnhancedModel)
-	if !model.unread[paneRoom] {
-		t.Fatal("page up cleared unread")
-	}
-	model.roomViewport.GotoBottom()
-	updated, _ = model.Update(key(tea.KeyPgDown))
-	model = updated.(EnhancedModel)
-	if model.unread[paneRoom] {
-		t.Fatal("page down at bottom did not clear unread")
+	for index := range want {
+		if model.pendingTranscript[index] != want[index] {
+			t.Fatalf("queue[%d]=%q want %q", index, model.pendingTranscript[index], want[index])
+		}
 	}
 }
 
-func TestEnhancedModelResizePreservesScrolledInactivePaneOffset(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 18
-	model.resizePanes()
-	lines := make([]string, 0, 20)
-	for i := range 20 {
-		lines = append(lines, fmt.Sprintf("room-%02d", i))
+func TestEnhancedModelReplaceUsesGameAndFamiliarSourcePathOnce(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	logger := &recordingLogger{enabled: true}
+	model.logger = logger
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready, Entries: []presentation.Entry{
+		{Pane: presentation.Game, Text: "You are dead", Operation: presentation.Replace},
+		{Pane: presentation.Familiar, Text: "You are dead", Operation: presentation.Replace},
+		{Pane: presentation.Game, Text: " \t", Operation: presentation.Replace},
+	}})
+	highlighted := model.highlightText("You are dead")
+	if got, want := model.pendingTranscript[1:], []string{highlighted, "[familiar] " + highlighted}; !equalStrings(got, want) {
+		t.Fatalf("transcript=%q want %q", got, want)
 	}
-	model.replacePane(paneRoom, lines)
-	model.activePane = paneRoom
-	model.roomViewport.GotoTop()
-	scrolledOffset := model.roomViewport.YOffset()
-	model.activePane = paneMain
-
-	updated, _ := model.Update(tea.WindowSizeMsg{Width: 90, Height: 18})
-	model = updated.(EnhancedModel)
-	if model.roomViewport.YOffset() != scrolledOffset {
-		t.Fatalf("room offset after resize = %d, want %d", model.roomViewport.YOffset(), scrolledOffset)
+	if got, want := logger.writes, []string{"You are dead", "You are dead"}; !equalStrings(got, want) {
+		t.Fatalf("log=%q want %q", got, want)
 	}
-}
-
-func TestEnhancedModelPaneReplacementPreservesScrolledInactiveOffset(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 18
-	model.resizePanes()
-	roomLines := make([]string, 0, 20)
-	for i := range 20 {
-		roomLines = append(roomLines, fmt.Sprintf("room-%02d", i))
-	}
-	model.replacePane(paneRoom, roomLines)
-	model.activePane = paneRoom
-	model.roomViewport.GotoTop()
-	scrolledOffset := model.roomViewport.YOffset()
-	model.activePane = paneMain
-	model.unread[paneRoom] = false
-
-	updatedLines := append([]string(nil), roomLines...)
-	updatedLines[len(updatedLines)-1] = "room-changed"
-	model.replacePane(paneRoom, updatedLines)
-	if model.roomViewport.YOffset() != scrolledOffset {
-		t.Fatalf("room offset = %d, want %d", model.roomViewport.YOffset(), scrolledOffset)
-	}
-	if !model.unread[paneRoom] {
-		t.Fatal("changed inactive pane was not marked unread")
-	}
-	model.unread[paneRoom] = false
-	model.replacePane(paneRoom, updatedLines)
-	if model.unread[paneRoom] {
-		t.Fatal("identical replacement marked unread")
+	if !contains(model.agent.recent, "You are dead\nYou are dead\n") {
+		t.Fatalf("recent=%q", model.agent.recent)
 	}
 }
 
-func TestEnhancedModelAppendPreservesScrolledInactiveFamiliarOffset(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.width = 80
-	model.height = 18
-	model.resizePanes()
-	lines := make([]string, 0, 20)
-	for i := range 20 {
-		lines = append(lines, fmt.Sprintf("familiar-%02d", i))
-	}
-	model.replacePane(paneFamiliar, lines)
-	model.activePane = paneFamiliar
-	model.familiarView.GotoTop()
-	scrolledOffset := model.familiarView.YOffset()
-	model.activePane = paneMain
-	model.unread[paneFamiliar] = false
-
-	model.appendPane(paneFamiliar, "new familiar line")
-	if model.familiarView.YOffset() != scrolledOffset {
-		t.Fatalf("familiar offset = %d, want %d", model.familiarView.YOffset(), scrolledOffset)
-	}
-	if !model.unread[paneFamiliar] {
-		t.Fatal("changed inactive familiar pane was not marked unread")
+func TestEnhancedModelResizeDoesNotClearTranscript(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	updated, command := model.Update(tea.WindowSizeMsg{Width: 44, Height: 20})
+	model = updated.(EnhancedModel)
+	if command != nil || !model.dimensionsReceived || model.width != 44 || model.height != 20 {
+		t.Fatalf("resize command=%v dimensionsReceived=%v dimensions=%dx%d", command, model.dimensionsReceived, model.width, model.height)
 	}
 }
 
-func TestEnhancedModelRecordsConnectionTransitionsAsDurableHistory(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready})
-	model.applySessionUpdate(presentation.Update{Connection: presentation.Reconnecting})
-	model.applySessionUpdate(presentation.Update{Connection: presentation.Reconnecting})
-	output := strings.Join(model.mainOutput, "\n")
-	if strings.Count(output, "connection: READY") != 1 || strings.Count(output, "connection: RECONNECTING") != 1 {
-		t.Fatalf("connection history = %q", output)
+func TestEnhancedModelDefersTranscriptUntilWindowSize(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.enqueueTranscript("startup record")
+	if command := model.scheduleTranscript(); command != nil {
+		t.Fatalf("default dimensions scheduled startup transcript: %T", command())
 	}
-	if !strings.Contains(output, "[system 01:02:03] connection: READY") {
-		t.Fatalf("timestamped connection history missing: %q", output)
+
+	updated, command := model.Update(tea.WindowSizeMsg{Width: 44, Height: 20})
+	model = updated.(EnhancedModel)
+	if !model.dimensionsReceived || command == nil {
+		t.Fatalf("first WindowSizeMsg dimensionsReceived=%v command=%v", model.dimensionsReceived, command)
+	}
+	if _, ok := command().(transcriptDrainMsg); !ok {
+		t.Fatalf("first WindowSizeMsg command=%T, want transcriptDrainMsg", command())
 	}
 }
 
-func TestEnhancedModelUsesTextInputHistoryAndEditorResult(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.input.SetValue("look")
-	updated, _ := model.Update(key(tea.KeyEnter))
+func TestEnhancedModelCtrlCQuitsImmediatelyOrAfterDrain(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	updated, command := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	model = updated.(EnhancedModel)
-	model.input.SetValue("north")
-	updated, _ = model.Update(key(tea.KeyEnter))
-	model = updated.(EnhancedModel)
-
-	updated, _ = model.Update(key(tea.KeyUp))
-	model = updated.(EnhancedModel)
-	if got := model.input.Value(); got != "north" {
-		t.Fatalf("history up=%q", got)
+	if !model.quitting {
+		t.Fatal("Ctrl-C did not begin quitting")
 	}
-	model.finishEditor(editorFinishedMsg{path: writeEditorFile(t, "dance\n")})
-	if got := model.input.Value(); got != "dance" {
-		t.Fatalf("editor result=%q", got)
-	}
-	model.finishEditor(editorFinishedMsg{path: writeEditorFile(t, "one\ntwo\n"), draft: "dance"})
-	if got := model.input.Value(); got != "dance" {
-		t.Fatalf("multiline editor did not preserve draft: %q", got)
+	if _, ok := command().(tea.QuitMsg); !ok {
+		t.Fatalf("empty Ctrl-C command=%T, want QuitMsg", command())
 	}
 
+	model = newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.enqueueTranscript("last record")
+	updated, command = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(EnhancedModel)
+	if _, ok := command().(transcriptDrainMsg); !ok || !model.quitting {
+		t.Fatalf("draining Ctrl-C command=%T quitting=%v", command(), model.quitting)
+	}
+}
+
+func TestEnhancedModelCtrlCWaitsForInFlightAndPreSizeDrain(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.enqueueTranscript("startup record")
+	updated, command := model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(EnhancedModel)
+	if command == nil || !model.quitting {
+		t.Fatalf("pre-size Ctrl-C command=%v quitting=%v", command, model.quitting)
+	}
+	if _, ok := command().(transcriptDrainMsg); !ok {
+		t.Fatalf("pre-size Ctrl-C command=%T, want transcriptDrainMsg", command())
+	}
+
+	model = newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.dimensionsReceived = true
+	model.drainScheduled = true
+	model.enqueueTranscript("last record")
+	updated, printCommand := model.Update(transcriptDrainMsg{})
+	model = updated.(EnhancedModel)
+	if printCommand == nil || len(model.pendingTranscript) != 0 || !model.drainScheduled {
+		t.Fatalf("drain did not leave final print in flight: command=%v pending=%d scheduled=%v", printCommand, len(model.pendingTranscript), model.drainScheduled)
+	}
+	updated, command = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	model = updated.(EnhancedModel)
+	if command != nil || !model.quitting || !model.drainScheduled {
+		t.Fatalf("Ctrl-C during final print command=%v quitting=%v scheduled=%v", command, model.quitting, model.drainScheduled)
+	}
+	_, command = model.Update(transcriptDrainMsg{})
+	if command == nil {
+		t.Fatal("final drain did not schedule quit")
+	}
+	if _, ok := command().(tea.QuitMsg); !ok {
+		t.Fatalf("final drain command=%T, want QuitMsg", command())
+	}
+}
+
+func TestEnhancedModelSourceCloseDrainsInFlightRecordAndStaysDisconnected(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.dimensionsReceived = true
+	model.drainScheduled = true
+	model.enqueueTranscript("last record")
+	updated, printCommand := model.Update(transcriptDrainMsg{})
+	model = updated.(EnhancedModel)
+	if printCommand == nil || len(model.pendingTranscript) != 0 || !model.drainScheduled {
+		t.Fatalf("drain did not leave final print in flight: command=%v pending=%d scheduled=%v", printCommand, len(model.pendingTranscript), model.drainScheduled)
+	}
+
+	updated, command := model.Update(sessionClosedMsg{})
+	model = updated.(EnhancedModel)
+	if command != nil || !model.sourceDone || model.snapshot.Connection != presentation.Disconnected || len(model.pendingTranscript) != 1 {
+		t.Fatalf("source close command=%v sourceDone=%v connection=%v pending=%v", command, model.sourceDone, model.snapshot.Connection, model.pendingTranscript)
+	}
+	if !contains(model.pendingTranscript[0], "disconnected") {
+		t.Fatalf("source close did not enqueue disconnect: %v", model.pendingTranscript)
+	}
+
+	updated, command = model.Update(transcriptDrainMsg{})
+	model = updated.(EnhancedModel)
+	if command == nil || len(model.pendingTranscript) != 0 || !model.drainScheduled {
+		t.Fatalf("disconnect did not drain: command=%v pending=%d scheduled=%v", command, len(model.pendingTranscript), model.drainScheduled)
+	}
+	updated, command = model.Update(transcriptDrainMsg{})
+	model = updated.(EnhancedModel)
+	if command != nil || model.quitting || model.snapshot.Connection != presentation.Disconnected {
+		t.Fatalf("source close quit or changed state: command=%v quitting=%v connection=%v", command, model.quitting, model.snapshot.Connection)
+	}
+}
+
+type recordingLogger struct {
+	enabled bool
+	writes  []string
+}
+
+func (logger *recordingLogger) Start(string) (telemetry.StartResult, error) {
+	logger.enabled = true
+	return telemetry.StartResult{}, nil
+}
+func (logger *recordingLogger) Stop() error { logger.enabled = false; return nil }
+func (logger *recordingLogger) Write(line string) error {
+	logger.writes = append(logger.writes, line)
+	return nil
+}
+func (logger *recordingLogger) IsEnabled() bool { return logger.enabled }
+func (logger *recordingLogger) Path() string    { return "" }
+
+func TestEnhancedModelUsesInlineViewAndMapNavigation(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 80, 24
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready, Location: presentation.Location{Title: "[Town]", Exits: []string{"north"}}, Hands: presentation.Hands{Left: "shield", Right: "sword", PreparedSpell: "Fire"}, Map: presentation.Map{Lines: []string{"o─@", "  │", "  o"}, CurrentToken: "1", CurrentLine: 0, CurrentColumn: 2}})
+	view := model.View()
+	if view.AltScreen || view.MouseMode != tea.MouseModeNone {
+		t.Fatalf("inline view=%#v", view)
+	}
+	if got := view.Content; !contains(got, "L: shield") || !contains(got, "R: sword") || !contains(got, "Sp: Fire") || !contains(got, "Exits: north") || contains(got, "DragonRealms") {
+		t.Fatalf("dashboard=%q", got)
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(EnhancedModel)
+	if !model.mapNavigation {
+		t.Fatal("escape did not enter map navigation")
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model = updated.(EnhancedModel)
+	if model.mapNavigation {
+		t.Fatal("tab did not return input focus")
+	}
+}
+
+func TestEnhancedModelEscapeKeepsMapVisibleAtMinimumHeight(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 60, 19
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready, Map: presentation.Map{Lines: []string{"@"}}})
+	if !model.mapVisible() {
+		t.Fatal("map hidden before Escape")
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	model = updated.(EnhancedModel)
+	if !model.mapNavigation || !model.mapVisible() {
+		t.Fatalf("Escape navigation=%v mapVisible=%v", model.mapNavigation, model.mapVisible())
+	}
+}
+
+func TestEnhancedModelPlacesHandsBesideVisibleMap(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 60, 22
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready, Location: presentation.Location{Title: "[Town]"}, Hands: presentation.Hands{Left: "shield", Right: "sword"}, Map: presentation.Map{Lines: []string{"o---@", "    |", "    o", "    |", "    o"}, CurrentToken: "1", CurrentLine: 0, CurrentColumn: 4}})
+	for _, row := range strings.Split(model.View().Content, "\n") {
+		if contains(row, "L: shield") && contains(row, "|") {
+			return
+		}
+	}
+	t.Fatalf("hands were not beside visible map: %q", model.View().Content)
+}
+
+func TestEnhancedModelModalsKeepDashboardHeight(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 100, 30
+	model.mapOutput = []string{"@", "|", "o", "|", "o", "|", "o", "|"}
+	want := lipgloss.Height(model.View().Content)
+	for _, mode := range []ViewMode{ViewModeHelp, ViewModeTheme} {
+		model.viewMode = mode
+		if got := lipgloss.Height(model.View().Content); got != want {
+			t.Errorf("mode %v height = %d, want dashboard height %d", mode, got, want)
+		}
+	}
+}
+
+func TestEnhancedModelEditorPreservesDraftAndRemovesTemporaryFile(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	path := filepath.Join(t.TempDir(), "draft")
+	if err := os.WriteFile(path, []byte("dance\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model.finishEditor(editorFinishedMsg{path: path, draft: "look"})
+	if model.input.Value() != "dance" {
+		t.Fatalf("editor result=%q", model.input.Value())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("editor file remains: %v", err)
+	}
+	path = filepath.Join(t.TempDir(), "bad")
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model.finishEditor(editorFinishedMsg{path: path, draft: "dance"})
+	if model.input.Value() != "dance" || !contains(model.pendingTranscript[len(model.pendingTranscript)-1], "editor returned more than one line") {
+		t.Fatalf("multiline editor: input=%q queue=%v", model.input.Value(), model.pendingTranscript)
+	}
+	path = filepath.Join(t.TempDir(), "process-failure")
+	if err := os.WriteFile(path, []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model.finishEditor(editorFinishedMsg{path: path, draft: "dance", err: errors.New("editor exited 1")})
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) || model.input.Value() != "dance" || !contains(strings.Join(model.pendingTranscript, "\n"), "editor failed: editor exited 1") {
+		t.Fatalf("process failure: file=%v input=%q queue=%v", err, model.input.Value(), model.pendingTranscript)
+	}
+	path = filepath.Join(t.TempDir(), "read-failure")
+	if err := os.WriteFile(path, []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	readEditorFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
+	t.Cleanup(func() { readEditorFile = os.ReadFile })
+	model.finishEditor(editorFinishedMsg{path: path, draft: "dance"})
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) || model.input.Value() != "dance" || !contains(strings.Join(model.pendingTranscript, "\n"), "editor failed: read failed") {
+		t.Fatalf("read failure: file=%v input=%q queue=%v", err, model.input.Value(), model.pendingTranscript)
+	}
+	readEditorFile = os.ReadFile
 	removeEditorFile = func(string) error { return errors.New("remove failed") }
 	t.Cleanup(func() { removeEditorFile = os.Remove })
-	model.finishEditor(editorFinishedMsg{path: writeEditorFile(t, "kick\n"), draft: "dance"})
-	if got := model.input.Value(); got != "dance" {
-		t.Fatalf("remove failure did not preserve draft: %q", got)
+	path = filepath.Join(t.TempDir(), "remove-failure")
+	if err := os.WriteFile(path, []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "editor failed: remove failed") {
-		t.Fatalf("remove failure was not reported: %q", output)
+	model.finishEditor(editorFinishedMsg{path: path, draft: "dance"})
+	if model.input.Value() != "dance" || !contains(strings.Join(model.pendingTranscript, "\n"), "editor failed: remove failed") {
+		t.Fatalf("remove failure: input=%q queue=%v", model.input.Value(), model.pendingTranscript)
 	}
 }
 
-func TestEnhancedModelCleansEditorDraftAfterProcessFailure(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	path := writeEditorFile(t, "changed\n")
-	removed := false
-	removeEditorFile = func(got string) error {
-		if got != path {
-			t.Fatalf("removed %q, want %q", got, path)
+func TestEnhancedModelLoggingToggleAndConnectionNotices(t *testing.T) {
+	logDir := t.TempDir()
+	model := InitialEnhancedModel(&fakeSession{updates: make(chan presentation.Update)}, Options{Character: "Hero", LogDir: logDir})
+	if model.logger.IsEnabled() {
+		t.Fatal("logging enabled initially")
+	}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	model = updated.(EnhancedModel)
+	if !model.logger.IsEnabled() || model.logState != logOn {
+		t.Fatalf("logging start: %v", model.logState)
+	}
+	model.input.SetValue("look")
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(EnhancedModel)
+	entries, err := os.ReadDir(logDir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("log entries=%d err=%v", len(entries), err)
+	}
+	data, err := os.ReadFile(filepath.Join(logDir, entries[0].Name()))
+	if err != nil || !contains(string(data), "> look") {
+		t.Fatalf("command log=%q err=%v", data, err)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	model = updated.(EnhancedModel)
+	if model.logger.IsEnabled() || model.logState != logOff {
+		t.Fatalf("logging stop: %v", model.logState)
+	}
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready})
+	model.applySessionUpdate(presentation.Update{Connection: presentation.Reconnecting})
+	if len(model.pendingTranscript) < 3 {
+		t.Fatalf("connection notices=%v", model.pendingTranscript)
+	}
+}
+
+func contains(value, part string) bool {
+	for index := 0; index+len(part) <= len(value); index++ {
+		if value[index:index+len(part)] == part {
+			return true
 		}
-		removed = true
-		return nil
 	}
-	t.Cleanup(func() { removeEditorFile = os.Remove })
-
-	model.finishEditor(editorFinishedMsg{path: path, draft: "look", err: errors.New("editor exited 1")})
-	if !removed {
-		t.Fatal("editor temp file was not removed after process failure")
-	}
-	if got := model.input.Value(); got != "look" {
-		t.Fatalf("draft = %q, want look", got)
-	}
-	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "editor failed: editor exited 1") {
-		t.Fatalf("process failure not reported: %q", output)
-	}
-}
-
-func TestEnhancedModelCleansEditorDraftAfterReadFailure(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	path := writeEditorFile(t, "changed\n")
-	readEditorFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
-	removed := false
-	removeEditorFile = func(got string) error {
-		removed = true
-		return os.Remove(got)
-	}
-	t.Cleanup(func() {
-		readEditorFile = os.ReadFile
-		removeEditorFile = os.Remove
-	})
-
-	model.finishEditor(editorFinishedMsg{path: path, draft: "look"})
-	if !removed {
-		t.Fatal("editor temp file was not removed after read failure")
-	}
-	if got := model.input.Value(); got != "look" {
-		t.Fatalf("draft = %q, want look", got)
-	}
-	if output := strings.Join(model.mainOutput, "\n"); !strings.Contains(output, "editor failed: read failed") {
-		t.Fatalf("read failure not reported: %q", output)
-	}
-}
-
-func TestEnhancedModelLoggingCanStartDisabledAndToggleCurrentSession(t *testing.T) {
-	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
-	model.Init()
-	if model.logger.IsEnabled() || !strings.Contains(model.buildStatusBar(), "LOG off") {
-		t.Fatalf("logging initial state enabled")
-	}
-	updated, _ := model.Update(key(tea.KeyF4))
-	model = updated.(EnhancedModel)
-	if !model.logger.IsEnabled() || !strings.Contains(model.buildStatusBar(), "LOG on") {
-		t.Fatalf("logging did not start")
-	}
-	updated, _ = model.Update(key(tea.KeyF4))
-	model = updated.(EnhancedModel)
-	if model.logger.IsEnabled() || !strings.Contains(model.buildStatusBar(), "LOG off") {
-		t.Fatalf("logging did not stop")
-	}
-}
-
-func newTestModel(t *testing.T, session gameSession, logging bool) EnhancedModel {
-	t.Helper()
-	return newTestModelWithLogDir(t, session, t.TempDir(), logging)
-}
-
-func newTestModelWithLogDir(t *testing.T, session gameSession, logDir string, logging bool) EnhancedModel {
-	t.Helper()
-	model := InitialEnhancedModel(session, Options{
-		Character: "Hero",
-		LogDir:    logDir,
-		ThemeDir:  t.TempDir(),
-		Logging:   logging,
-	})
-	model.now = func() time.Time {
-		return time.Date(2026, time.August, 30, 1, 2, 3, 0, time.Local)
-	}
-	return model
-}
-
-type fakeSession struct {
-	updates chan presentation.Update
-	sent    []string
-	err     error
-}
-
-type fakeLogger struct {
-	enabled   bool
-	writeErr  error
-	stopErr   error
-	stopCalls int
-	writes    []string
-}
-
-func (l *fakeLogger) Start(string) (telemetry.StartResult, error) {
-	l.enabled = true
-	return telemetry.StartResult{Path: "/tmp/dr-charm.log"}, nil
-}
-
-func (l *fakeLogger) Stop() error {
-	l.stopCalls++
-	l.enabled = false
-	return l.stopErr
-}
-
-func (l *fakeLogger) Write(line string) error {
-	l.writes = append(l.writes, line)
-	return l.writeErr
-}
-func (l *fakeLogger) IsEnabled() bool { return l.enabled }
-func (l *fakeLogger) Path() string    { return "/tmp/dr-charm.log" }
-
-func (s *fakeSession) Send(command string) error {
-	s.sent = append(s.sent, command)
-	return s.err
-}
-
-func (s *fakeSession) Next() (presentation.Update, bool) {
-	update, ok := <-s.updates
-	return update, ok
-}
-
-func key(code rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg(tea.Key{Code: code})
-}
-
-func ctrlKey(code rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg(tea.Key{Code: code, Mod: tea.ModCtrl})
-}
-
-func writeEditorFile(t *testing.T, contents string) string {
-	t.Helper()
-	file, err := os.CreateTemp(t.TempDir(), "editor-*.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.WriteString(contents); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return file.Name()
+	return false
 }

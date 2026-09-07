@@ -6,7 +6,14 @@ import (
 	"strings"
 )
 
-func render(zone *Zone, currentID int) string {
+type RenderedMap struct {
+	Lines         []string
+	CurrentToken  string
+	CurrentLine   int
+	CurrentColumn int
+}
+
+func render(zone *Zone, currentID int) RenderedMap {
 	current := zone.Nodes[currentID]
 	z := 0
 	if current != nil {
@@ -14,7 +21,7 @@ func render(zone *Zone, currentID int) string {
 	}
 	nodes := renderNodes(zone, currentID, z)
 	if len(nodes) == 0 {
-		return "No rooms on this level."
+		return RenderedMap{Lines: []string{"No rooms on this level."}}
 	}
 	minX, maxX, minY, maxY := bounds(nodes)
 	width := (maxX-minX)*4 + 1
@@ -32,14 +39,15 @@ func render(zone *Zone, currentID int) string {
 		}
 	}
 
-	lines := trimGrid(grid)
+	lines, top, left := trimGrid(grid)
+	result := RenderedMap{Lines: append([]string(nil), lines...)}
 	if current != nil {
-		lines = append(lines, "", fmt.Sprintf("@ #%d %s", current.ID, current.Title))
-		if len(current.Exits) > 0 {
-			lines = append(lines, "Exits: "+exitSummary(current))
-		}
+		x, y := gridPos(current.X, current.Y, minX, minY)
+		result.CurrentToken = fmt.Sprintf("%d", current.ID)
+		result.CurrentLine = y - top
+		result.CurrentColumn = x - left
 	}
-	return strings.Join(lines, "\n")
+	return result
 }
 
 func nodesAtZ(zone *Zone, z int) []*Node {
@@ -174,10 +182,21 @@ func gridPos(x, y, minX, minY int) (int, int) {
 	return (x - minX) * 4, (y - minY) * 2
 }
 
-func trimGrid(grid [][]rune) []string {
-	lines := make([]string, 0, len(grid))
+func trimGrid(grid [][]rune) (lines []string, top, left int) {
+	left = len(grid[0])
 	for _, row := range grid {
-		line := strings.TrimRight(string(row), " ")
+		for column, value := range row {
+			if value != ' ' && column < left {
+				left = column
+			}
+		}
+	}
+	if left == len(grid[0]) {
+		left = 0
+	}
+	lines = make([]string, 0, len(grid))
+	for _, row := range grid {
+		line := strings.TrimRight(string(row[left:]), " ")
 		if line == "" {
 			line = " "
 		}
@@ -185,11 +204,12 @@ func trimGrid(grid [][]rune) []string {
 	}
 	for len(lines) > 1 && strings.TrimSpace(lines[0]) == "" {
 		lines = lines[1:]
+		top++
 	}
 	for len(lines) > 1 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
 	}
-	return lines
+	return lines, top, left
 }
 
 func exitSummary(node *Node) string {

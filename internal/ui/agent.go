@@ -145,7 +145,7 @@ func (m *EnhancedModel) appendAgentMessage(label, text string) {
 	for index := range lines {
 		lines[index] = badge + " " + body.Render(lines[index])
 	}
-	m.appendPane(paneMain, strings.Join(lines, "\n"))
+	m.enqueueTranscript(strings.Join(lines, "\n"))
 }
 
 func (m *EnhancedModel) addRecent(text string) {

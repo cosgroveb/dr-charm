@@ -17,6 +17,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install --yes tmux
       - name: Validate release tag
         run: scripts/release-version "$GITHUB_REF_NAME"
       - name: Test

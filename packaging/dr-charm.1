@@ -13,9 +13,12 @@ dr-charm \- DragonRealms terminal client
 .SH DESCRIPTION
 .B dr-charm
 signs in to DragonRealms with an existing account and character, then renders a
-full-screen terminal interface.
-The status bar shows connection and logging state. Connection state remains
-visible while the session closes or reconnects. You can scroll any output pane.
+terminal interface with an inline dashboard.
+Game, system, command, agent, whisper, and familiar output stays in the
+terminal's native scrollback. Familiar messages use a \fB[familiar]\fR label.
+The dashboard shows the current location and exits, left and right hands, a
+prepared spell when present, and connection and logging state. Connection state
+remains visible while the session closes or reconnects.
 .SH INTERFACE
 .TP
 .B Enter
@@ -27,24 +30,19 @@ Recall commands from the current session.
 .B Ctrl-G
 Open the current input in \fB$VISUAL\fR or \fB$EDITOR\fR.
 .TP
-.B Page Up, Page Down, Home, End
-Scroll the focused output pane. When Input is focused, Home and End move within
-the command line.
+.B Escape
+Enter map navigation when the learned map is visible. Leave help or the theme
+selector. In map navigation, return to command entry.
 .TP
 .B Tab
-Cycle Input and visible panes.
+Return from map navigation to command entry.
 .TP
-.B Shift-Tab
-Cycle Input and visible panes in reverse.
-.TP
-.B Mouse wheel
-Scroll the focused output pane.
+.B h, l, j, k, Ctrl-U, Ctrl-D, g, G
+Pan a visible learned map horizontally, vertically, by half a screen, or to its
+top or bottom while map navigation is active.
 .TP
 .B F1
 Show help.
-.TP
-.B F2
-Toggle multi-pane and single-pane views.
 .TP
 .B F3
 Select a theme.
@@ -52,16 +50,10 @@ Select a theme.
 .B F4
 Toggle session logging.
 .TP
-.B F5
-Toggle the Room pane between room details and the learned map.
-.TP
 .B F6
 Toggle auto mode. Enabling it does not make a model request. While auto mode is
 on and the status bar shows \fBREADY\fR, Enter whispers to the agent instead of
 sending a game command.
-.TP
-.B Escape
-Leave help or the theme selector.
 .TP
 .B Ctrl-C
 Quit.
@@ -116,7 +108,8 @@ The endpoint must support streaming OpenAI Responses requests and function
 tools. Chat Completions endpoints are not supported. \fBdr-charm\fR does not
 set a reasoning effort or service tier.
 .PP
-Every request sends recent Game and Familiar text to the configured endpoint.
+Every request sends recent game and familiar text from terminal scrollback to
+the configured endpoint.
 Requests may also include the configured agent character, earlier agent
 conversation, and whispers. Use an endpoint you trust. When that conversation
 grows long, \fBdr-charm\fR asks the endpoint to summarize its older parts. It

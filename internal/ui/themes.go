@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"charm.land/lipgloss/v2"
 )
 
 type theme struct {
@@ -127,22 +125,4 @@ func (c *themeCatalog) next() {
 	if c.currentIndex < len(c.themes)-1 {
 		c.currentIndex++
 	}
-}
-
-func (c *themeCatalog) borderStyle() lipgloss.Style {
-	current := c.current()
-	style := lipgloss.NewStyle()
-	switch current.BorderType {
-	case "normal":
-		style = style.Border(lipgloss.NormalBorder())
-	case "hidden":
-		style = style.Border(lipgloss.HiddenBorder())
-	case "thick":
-		style = style.Border(lipgloss.ThickBorder())
-	case "double":
-		style = style.Border(lipgloss.DoubleBorder())
-	default:
-		style = style.Border(lipgloss.RoundedBorder())
-	}
-	return style.BorderForeground(lipgloss.Color(current.Border)).Padding(current.Padding)
 }

@@ -14,8 +14,6 @@ type PaneID uint8
 const (
 	Game PaneID = iota
 	Familiar
-	RoomPane
-	HandsPane
 )
 
 type Operation uint8
@@ -34,13 +32,25 @@ type Entry struct {
 
 type StatusField struct{ Label, Value string }
 type Notice struct{ Text string }
+type Location struct {
+	Title string
+	Exits []string
+}
+type Hands struct{ Left, Right, PreparedSpell string }
+type Map struct {
+	Lines                      []string
+	CurrentToken               string
+	CurrentLine, CurrentColumn int
+}
 type Update struct {
-	Connection    ConnectionState
-	Prompted      bool
-	Status        []StatusField
-	Entries       []Entry
-	Notices       []Notice
-	Title, Prompt string
-	Character     string
-	Map           string
+	Connection ConnectionState
+	Prompted   bool
+	Status     []StatusField
+	Entries    []Entry
+	Notices    []Notice
+	Location   Location
+	Hands      Hands
+	Prompt     string
+	Character  string
+	Map        Map
 }

@@ -32,11 +32,12 @@ const (
 
 // Update is one ordered protocol publication.
 type Update struct {
-	Snapshot    Snapshot
-	Display     []DisplayEvent
-	Diagnostics []Diagnostic
-	Prompted    bool
-	Err         error
+	Snapshot     Snapshot
+	Display      []DisplayEvent
+	Diagnostics  []Diagnostic
+	Prompted     bool
+	RoomObserved bool
+	Err          error
 }
 
 // Snapshot is immutable public game state at one protocol action.

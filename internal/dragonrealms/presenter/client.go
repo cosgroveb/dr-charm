@@ -41,7 +41,7 @@ func (c *Client) Next() (presentation.Update, bool) {
 func (c *Client) translate(u dragonrealms.Update) presentation.Update {
 	p := Translate(u)
 	c.mapper.ObserveRoom(mapRoom(u.Snapshot.Room))
-	p.Map = c.mapper.Render()
+	p.Map = copyMap(c.mapper.Render())
 	if status := c.mapper.Status(); status != "" {
 		p.Status = append(p.Status, presentation.StatusField{Label: "Map", Value: status})
 	}
@@ -52,11 +52,11 @@ func (c *Client) translate(u dragonrealms.Update) presentation.Update {
 }
 
 func Translate(u dragonrealms.Update) presentation.Update {
-	p := presentation.Update{Title: terminaltext.Sanitize(u.Snapshot.Room.Title), Prompt: terminaltext.Sanitize(u.Snapshot.Prompt), Character: terminaltext.Sanitize(u.Snapshot.Character), Prompted: u.Prompted, Status: statusFields(u.Snapshot)}
-	p.Entries = append(p.Entries,
-		presentation.Entry{Pane: presentation.RoomPane, Text: strings.Join(roomLines(u.Snapshot.Room), "\n"), Operation: presentation.Replace},
-		presentation.Entry{Pane: presentation.HandsPane, Text: strings.Join(handsLines(u.Snapshot), "\n"), Operation: presentation.Replace},
-	)
+	p := presentation.Update{
+		Prompt: terminaltext.Sanitize(u.Snapshot.Prompt), Character: terminaltext.Sanitize(u.Snapshot.Character), Prompted: u.Prompted, Status: statusFields(u.Snapshot),
+		Location: presentation.Location{Title: terminaltext.Sanitize(u.Snapshot.Room.Title), Exits: sanitizedList(u.Snapshot.Room.Exits)},
+		Hands:    presentation.Hands{Left: terminaltext.Sanitize(u.Snapshot.Hands.Left), Right: terminaltext.Sanitize(u.Snapshot.Hands.Right), PreparedSpell: terminaltext.Sanitize(u.Snapshot.PreparedSpell)},
+	}
 	switch u.Snapshot.Connection {
 	case dragonrealms.ConnectionReady:
 		p.Connection = presentation.Ready
@@ -81,6 +81,9 @@ func Translate(u dragonrealms.Update) presentation.Update {
 		}
 		p.Entries = append(p.Entries, presentation.Entry{Pane: pane, Text: terminaltext.Sanitize(d.Text), Operation: op})
 	}
+	if u.RoomObserved {
+		p.Entries = append(p.Entries, presentation.Entry{Pane: presentation.Game, Text: strings.Join(roomLines(u.Snapshot.Room), "\n"), Operation: presentation.Append})
+	}
 	for _, d := range u.Diagnostics {
 		p.Notices = append(p.Notices, presentation.Notice{Text: safeNotice(d.Text)})
 	}
@@ -88,6 +91,10 @@ func Translate(u dragonrealms.Update) presentation.Update {
 		p.Notices = append(p.Notices, presentation.Notice{Text: "connection error"})
 	}
 	return p
+}
+
+func copyMap(source mapper.RenderedMap) presentation.Map {
+	return presentation.Map{Lines: append([]string(nil), source.Lines...), CurrentToken: source.CurrentToken, CurrentLine: source.CurrentLine, CurrentColumn: source.CurrentColumn}
 }
 
 func mapRoom(room dragonrealms.Room) mapper.Room {
@@ -165,14 +172,6 @@ func roomLines(r dragonrealms.Room) []string {
 		for _, v := range r.Creatures {
 			lines = append(lines, "  "+terminaltext.Sanitize(v))
 		}
-	}
-	return lines
-}
-
-func handsLines(s dragonrealms.Snapshot) []string {
-	lines := []string{"Right: " + terminaltext.Sanitize(s.Hands.Right), "Left: " + terminaltext.Sanitize(s.Hands.Left)}
-	if spell := terminaltext.Sanitize(s.PreparedSpell); spell != "" {
-		lines = append(lines, "", "Spell: "+spell)
 	}
 	return lines
 }

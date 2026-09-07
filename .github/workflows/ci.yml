@@ -18,6 +18,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install --yes tmux
       - name: Check formatting
         shell: bash
         run: |
