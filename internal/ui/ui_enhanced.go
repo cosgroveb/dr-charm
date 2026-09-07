@@ -218,7 +218,12 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	return m, nil
+	if m.viewMode == ViewModeHelp || m.viewMode == ViewModeTheme {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(message)
+	return m, cmd
 }
 
 func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {

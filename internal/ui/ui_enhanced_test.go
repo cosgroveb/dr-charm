@@ -312,6 +312,45 @@ func TestEnhancedModelInitialInputAcceptsTyping(t *testing.T) {
 	}
 }
 
+func TestEnhancedModelPaste(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		mode    ViewMode
+		pane    string
+		initial string
+		cursor  int
+		paste   string
+		want    string
+	}{
+		{name: "empty input", mode: ViewModeMulti, pane: paneInput, paste: "look", want: "look"},
+		{name: "at cursor", mode: ViewModeMulti, pane: paneInput, initial: "say  hello", cursor: 4, paste: "café", want: "say café hello"},
+		{name: "game pane active", mode: ViewModeMulti, pane: paneMain, paste: "look", want: "look"},
+		{name: "single pane", mode: ViewModeSingle, pane: paneInput, paste: "look", want: "look"},
+		{name: "multiline", mode: ViewModeMulti, pane: paneInput, paste: "look\nnorth\twest\n", want: "look north west "},
+		{name: "length limit", mode: ViewModeMulti, pane: paneInput, paste: strings.Repeat("界", 4097), want: strings.Repeat("界", 4096)},
+		{name: "help", mode: ViewModeHelp, pane: paneInput, initial: "draft", paste: "look", want: "draft"},
+		{name: "theme selection", mode: ViewModeTheme, pane: paneInput, initial: "draft", paste: "look", want: "draft"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := &fakeSession{updates: make(chan presentation.Update)}
+			model := newTestModel(t, session, false)
+			model.viewMode = test.mode
+			model.activePane = test.pane
+			model.input.SetValue(test.initial)
+			model.input.SetCursor(test.cursor)
+
+			updated, _ := model.Update(tea.PasteMsg{Content: test.paste})
+			model = updated.(EnhancedModel)
+			if got := model.input.Value(); got != test.want {
+				t.Fatalf("pasted input=%q, want %q", got, test.want)
+			}
+			if len(session.sent) != 0 || len(model.history) != 0 {
+				t.Fatalf("paste submitted a command: sent=%v history=%v", session.sent, model.history)
+			}
+		})
+	}
+}
+
 func TestEnhancedModelPageUpDoesNotClearUnread(t *testing.T) {
 	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)}, false)
 	model.width = 80
