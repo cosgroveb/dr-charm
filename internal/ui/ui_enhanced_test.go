@@ -73,7 +73,7 @@ func TestEnhancedModelPasteInsertsFlattenedRunesAndHonorsModalGuards(t *testing.
 			model := newTestModel(t, session)
 			model.viewMode = test.mode
 			model.input.SetValue(test.initial)
-			model.input.SetCursor(test.cursor)
+			model.input.SetCursorColumn(test.cursor)
 
 			updated, _ := model.Update(tea.PasteMsg{Content: test.paste})
 			model = updated.(EnhancedModel)
@@ -133,41 +133,41 @@ func TestEnhancedModelResizeDoesNotClearTranscript(t *testing.T) {
 
 func TestEnhancedModelSynchronizesInputPresentationWithoutChangingDraft(t *testing.T) {
 	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
-	initialGeometry := calculateDashboardGeometry(model.width, model.height, false, model.themes.current(), model.input.Prompt)
-	if model.input.Prompt != "Command > " || model.input.Width() != initialGeometry.inputWidth || !model.input.Focused() {
-		t.Fatalf("initial input prompt=%q width=%d geometry=%+v", model.input.Prompt, model.input.Width(), initialGeometry)
+	initialGeometry := calculateDashboardGeometry(model.width, model.height, false, model.themes.current(), model.inputLabel)
+	if model.inputLabel != "Command > " || model.input.Width() != initialGeometry.inputWidth || !model.input.Focused() {
+		t.Fatalf("initial input prompt=%q width=%d geometry=%+v", model.inputLabel, model.input.Width(), initialGeometry)
 	}
 	model.agent.client = nativeTerminalAgent{}
 	model.input.SetValue("say 你好")
-	model.input.SetCursor(3)
+	model.input.SetCursorColumn(3)
 	model.width, model.height = 168, 24
 	model.mapOutput = []string{"@"}
 	model.syncInputPresentation()
-	mapGeometry := calculateDashboardGeometry(model.width, model.height, true, model.themes.current(), model.input.Prompt)
-	if mapGeometry.inputInterior != 82 || model.input.Width() != mapGeometry.inputWidth || ansi.StringWidth(model.input.Prompt)+model.input.Width()+1 > mapGeometry.inputInterior || !model.input.Focused() {
-		t.Fatalf("mapped input prompt=%q width=%d geometry=%+v", model.input.Prompt, model.input.Width(), mapGeometry)
+	mapGeometry := calculateDashboardGeometry(model.width, model.height, true, model.themes.current(), model.inputLabel)
+	if mapGeometry.inputInterior != 123 || model.input.Width() != mapGeometry.inputWidth || ansi.StringWidth(model.inputLabel)+model.input.Width() > mapGeometry.inputInterior || !model.input.Focused() {
+		t.Fatalf("mapped input prompt=%q width=%d geometry=%+v", model.inputLabel, model.input.Width(), mapGeometry)
 	}
 
 	updated, _ := model.Update(presentation.Update{Connection: presentation.Ready, Prompt: strings.Repeat("very-long-prompt", 8) + ">"})
 	model = updated.(EnhancedModel)
-	if !strings.HasPrefix(model.input.Prompt, "Command ") || model.input.Value() != "say 你好" || model.input.Position() != 3 || !model.input.Focused() {
-		t.Fatalf("prompt update changed input prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
+	if !strings.HasPrefix(model.inputLabel, "Command ") || model.input.Value() != "say 你好" || model.input.Column() != 3 || !model.input.Focused() {
+		t.Fatalf("prompt update changed input prompt=%q value=%q cursor=%d", model.inputLabel, model.input.Value(), model.input.Column())
 	}
 	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
 	model = updated.(EnhancedModel)
-	if model.input.Prompt != "Whisper > " || model.input.Value() != "say 你好" || model.input.Position() != 3 || !model.input.Focused() {
-		t.Fatalf("agent toggle changed input prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
+	if model.inputLabel != "Whisper > " || model.input.Value() != "say 你好" || model.input.Column() != 3 || !model.input.Focused() {
+		t.Fatalf("agent toggle changed input prompt=%q value=%q cursor=%d", model.inputLabel, model.input.Value(), model.input.Column())
 	}
 	model.themes.add(theme{Name: "wide-padding", Padding: 2})
 	model.viewMode = ViewModeTheme
 	model = model.handleThemeKeys(tea.KeyPressMsg{Code: 'G'})
-	if model.input.Value() != "say 你好" || model.input.Position() != 3 {
-		t.Fatalf("theme change changed input value=%q cursor=%d", model.input.Value(), model.input.Position())
+	if model.input.Value() != "say 你好" || model.input.Column() != 3 {
+		t.Fatalf("theme change changed input value=%q cursor=%d", model.input.Value(), model.input.Column())
 	}
 	updated, _ = model.Update(tea.WindowSizeMsg{Width: 10, Height: 24})
 	model = updated.(EnhancedModel)
-	if model.input.Width() < 1 || ansi.StringWidth(model.input.Prompt)+model.input.Width()+1 > 10 || model.input.Value() != "say 你好" || model.input.Position() != 3 {
-		t.Fatalf("narrow input prompt=%q width=%d value=%q cursor=%d", model.input.Prompt, model.input.Width(), model.input.Value(), model.input.Position())
+	if model.input.Width() < 1 || ansi.StringWidth(model.inputLabel)+model.input.Width() > 10 || model.input.Value() != "say 你好" || model.input.Column() != 3 {
+		t.Fatalf("narrow input prompt=%q width=%d value=%q cursor=%d", model.inputLabel, model.input.Width(), model.input.Value(), model.input.Column())
 	}
 	for _, row := range strings.Split(model.View().Content, "\n") {
 		if got := ansi.StringWidth(row); got > 10 {
@@ -176,8 +176,158 @@ func TestEnhancedModelSynchronizesInputPresentationWithoutChangingDraft(t *testi
 	}
 	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
 	model = updated.(EnhancedModel)
-	if !strings.HasPrefix(model.input.Prompt, "Command") || model.input.Value() != "say 你好" || model.input.Position() != 3 {
-		t.Fatalf("command restore prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
+	if !strings.HasPrefix(model.inputLabel, "Command") || model.input.Value() != "say 你好" || model.input.Column() != 3 {
+		t.Fatalf("command restore prompt=%q value=%q cursor=%d", model.inputLabel, model.input.Value(), model.input.Column())
+	}
+}
+
+func TestEnhancedModelWrapsDraftWithoutChangingSubmittedCommand(t *testing.T) {
+	session := &fakeSession{updates: make(chan presentation.Update)}
+	model := newTestModel(t, session)
+	model.width, model.height = 49, 24
+	model.mapOutput = []string{"@"}
+	draft := "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda"
+	model.input.SetValue(draft)
+	model.syncInputPresentation()
+
+	inputRows := strings.Split(ansi.Strip(model.buildInput()), "\n")
+	if len(inputRows) < 2 {
+		t.Fatalf("draft did not wrap: %q", inputRows)
+	}
+	if strings.Count(strings.Join(inputRows, "\n"), "Command >") != 1 {
+		t.Fatalf("prompt count=%d rows=%q", strings.Count(strings.Join(inputRows, "\n"), "Command >"), inputRows)
+	}
+	if model.input.Value() != draft {
+		t.Fatalf("wrapped value=%q want %q", model.input.Value(), draft)
+	}
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model = updated.(EnhancedModel)
+	if len(session.sent) != 1 || session.sent[0] != draft || model.input.Value() != "" {
+		t.Fatalf("submission sent=%q remaining=%q", session.sent, model.input.Value())
+	}
+}
+
+func TestEnhancedModelWrappedDraftFollowsCursorWithinInputRows(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 49, 24
+	model.mapOutput = []string{"@", "|", "o", "|", "o", "|", "o", "|", "o"}
+	draft := "HEAD " + strings.Repeat("alpha ", 40) + "TAIL"
+	model.input.SetValue(draft)
+	model.syncInputPresentation()
+	geometry := calculateDashboardGeometry(model.width, model.height, true, model.themes.current(), model.inputLabel)
+
+	endRows := strings.Split(ansi.Strip(model.buildInput()), "\n")
+	if model.input.Height() != geometry.inputHeight || len(endRows) != geometry.inputHeight || model.input.ScrollYOffset() == 0 || !strings.Contains(strings.Join(endRows, ""), "TAIL") || strings.Contains(strings.Join(endRows, ""), "HEAD") {
+		t.Fatalf("end viewport height=%d offset=%d rows=%q geometry=%+v", model.input.Height(), model.input.ScrollYOffset(), endRows, geometry)
+	}
+	for _, row := range endRows {
+		if got := ansi.StringWidth(row); got != geometry.inputInterior {
+			t.Fatalf("wrapped row width=%d want %d: %q", got, geometry.inputInterior, row)
+		}
+	}
+	if strings.Count(strings.Join(endRows, "\n"), "Command >") != 1 {
+		t.Fatalf("scrolled prompt rows=%q", endRows)
+	}
+
+	model.input.SetCursorColumn(0)
+	model.input.SetHeight(model.input.Height())
+	startRows := strings.Split(ansi.Strip(model.buildInput()), "\n")
+	if model.input.ScrollYOffset() != 0 || !strings.Contains(strings.Join(startRows, ""), "HEAD") || strings.Contains(strings.Join(startRows, ""), "TAIL") {
+		t.Fatalf("start viewport offset=%d rows=%q", model.input.ScrollYOffset(), startRows)
+	}
+
+	model.input.SetValue(strings.Repeat("x", 40))
+	model.input.SetCursorColumn(model.input.Width() - 1)
+	before := model.input.LineInfo().RowOffset
+	model.input.SetCursorColumn(model.input.Width())
+	after := model.input.LineInfo().RowOffset
+	if before != 0 || after != 1 {
+		t.Fatalf("hard-wrap cursor rows before=%d after=%d width=%d", before, after, model.input.Width())
+	}
+}
+
+func TestEnhancedModelWrappedDraftSurvivesResizeAndModeChange(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.agent.client = nativeTerminalAgent{}
+	model.width, model.height = 49, 24
+	model.mapOutput = []string{"@"}
+	draft := strings.Repeat("wide 界 text ", 12)
+	model.input.SetValue(draft)
+	model.input.SetCursorColumn(17)
+	model.syncInputPresentation()
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
+	model = updated.(EnhancedModel)
+	if model.inputLabel != "Whisper > " || model.input.Value() != draft || model.input.Column() != 17 || len(strings.Split(ansi.Strip(model.buildInput()), "\n")) < 2 {
+		t.Fatalf("F6 prompt=%q value=%q cursor=%d view=%q", model.inputLabel, model.input.Value(), model.input.Column(), ansi.Strip(model.buildInput()))
+	}
+	updated, _ = model.Update(tea.WindowSizeMsg{Width: 100, Height: 19})
+	model = updated.(EnhancedModel)
+	geometry := calculateDashboardGeometry(100, 19, true, model.themes.current(), model.inputLabel)
+	if model.input.Value() != draft || model.input.Column() != 17 || model.input.Height() > geometry.inputHeight {
+		t.Fatalf("resize value=%q cursor=%d height=%d geometry=%+v", model.input.Value(), model.input.Column(), model.input.Height(), geometry)
+	}
+}
+
+func TestEnhancedModelNormalizesCtrlVPasteIntoOneCommand(t *testing.T) {
+	original := readInputClipboard
+	readInputClipboard = func() (string, error) { return "look\r\nnorth\twest\n", nil }
+	t.Cleanup(func() { readInputClipboard = original })
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.input.SetValue("say  now")
+	model.input.SetCursorColumn(4)
+
+	updated, command := model.Update(tea.KeyPressMsg{Code: 'v', Mod: tea.ModCtrl})
+	model = updated.(EnhancedModel)
+	if command == nil {
+		t.Fatal("Ctrl-V returned no clipboard command")
+	}
+	updated, _ = model.Update(command())
+	model = updated.(EnhancedModel)
+	if got, want := model.input.Value(), "say look north west  now"; got != want || model.input.LineCount() != 1 || model.input.Column() != len([]rune("say look north west ")) {
+		t.Fatalf("Ctrl-V value=%q lines=%d want %q", got, model.input.LineCount(), want)
+	}
+}
+
+func TestEnhancedModelWrappedInputStaysWithinDashboardAtNarrowWidths(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		width, height int
+		mapLines      []string
+		draft         string
+		wantTail      bool
+	}{
+		{name: "zero", height: 24, draft: "界a"},
+		{name: "one", width: 1, height: 24, draft: "界a"},
+		{name: "two", width: 2, height: 24, draft: "界a"},
+		{name: "no-map scroll", width: 60, height: 24, draft: "HEAD " + strings.Repeat("combining e\u0301 and 界 ", 20) + "TAIL", wantTail: true},
+		{name: "compact map", width: 49, height: 24, mapLines: []string{"@"}, draft: strings.Repeat("combining e\u0301 and 界 ", 20)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+			model.width, model.height = test.width, test.height
+			model.mapOutput = test.mapLines
+			model.input.SetValue(test.draft)
+			model.syncInputPresentation()
+			view := model.View().Content
+			geometry := calculateDashboardGeometry(test.width, test.height, len(test.mapLines) > 0, model.themes.current(), model.inputLabel)
+			if got := lipgloss.Height(view); got != geometry.rows {
+				t.Fatalf("height=%d want %d: %q", got, geometry.rows, ansi.Strip(view))
+			}
+			for _, row := range strings.Split(view, "\n") {
+				if got := ansi.StringWidth(row); got > max(0, test.width) {
+					t.Fatalf("row width=%d want <=%d: %q", got, test.width, ansi.Strip(row))
+				}
+			}
+			if model.input.Value() != test.draft {
+				t.Fatalf("value=%q want %q", model.input.Value(), test.draft)
+			}
+			input := ansi.Strip(model.buildInput())
+			if test.wantTail && !strings.Contains(input, "TAIL") {
+				t.Fatalf("visible input=%q", input)
+			}
+		})
 	}
 }
 
@@ -372,7 +522,7 @@ func TestEnhancedModelModesPreviewThemeAndPreserveInteractiveState(t *testing.T)
 	model.mapPanLine, model.mapPanColumn = 4, 7
 	model.mapNavigation = true
 	model.input.SetValue("draft command")
-	model.input.SetCursor(5)
+	model.input.SetCursorColumn(5)
 	model.syncInputPresentation()
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyF1})
@@ -391,8 +541,8 @@ func TestEnhancedModelModesPreviewThemeAndPreserveInteractiveState(t *testing.T)
 	}
 	updated, _ = model.Update(tea.WindowSizeMsg{Width: 60, Height: 22})
 	model = updated.(EnhancedModel)
-	if model.input.Value() != "draft command" || model.input.Position() != 5 || model.mapPanLine != 4 || model.mapPanColumn != 7 || !model.mapNavigation {
-		t.Fatalf("mode state changed: input=%q cursor=%d pan=%d,%d navigation=%v", model.input.Value(), model.input.Position(), model.mapPanLine, model.mapPanColumn, model.mapNavigation)
+	if model.input.Value() != "draft command" || model.input.Column() != 5 || model.mapPanLine != 4 || model.mapPanColumn != 7 || !model.mapNavigation {
+		t.Fatalf("mode state changed: input=%q cursor=%d pan=%d,%d navigation=%v", model.input.Value(), model.input.Column(), model.mapPanLine, model.mapPanColumn, model.mapNavigation)
 	}
 	for _, size := range [][2]int{{100, 30}, {100, 19}, {60, 15}, {5, 24}} {
 		model.width, model.height = size[0], size[1]
@@ -419,12 +569,12 @@ func TestEnhancedModelMapShiftGMovesToBottomAndPreservesDraft(t *testing.T) {
 	model.mapOutput = []string{"@", "|", "o", "|", "o"}
 	model.mapNavigation = true
 	model.input.SetValue("draft command")
-	model.input.SetCursor(5)
+	model.input.SetCursorColumn(5)
 
 	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModShift}))
 	model = updated.(EnhancedModel)
-	if model.mapPanLine != len(model.mapOutput)-1 || model.input.Value() != "draft command" || model.input.Position() != 5 {
-		t.Fatalf("Shift-G map pan=%d draft=%q cursor=%d", model.mapPanLine, model.input.Value(), model.input.Position())
+	if model.mapPanLine != len(model.mapOutput)-1 || model.input.Value() != "draft command" || model.input.Column() != 5 {
+		t.Fatalf("Shift-G map pan=%d draft=%q cursor=%d", model.mapPanLine, model.input.Value(), model.input.Column())
 	}
 }
 
@@ -440,6 +590,14 @@ func TestEnhancedModelEditorPreservesDraftAndRemovesTemporaryFile(t *testing.T) 
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("editor file remains: %v", err)
+	}
+	path = filepath.Join(t.TempDir(), "tabbed")
+	if err := os.WriteFile(path, []byte("dance\tquickly\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model.finishEditor(editorFinishedMsg{path: path, draft: "look"})
+	if model.input.Value() != "dance quickly" || model.input.LineCount() != 1 {
+		t.Fatalf("tabbed editor value=%q lines=%d", model.input.Value(), model.input.LineCount())
 	}
 	path = filepath.Join(t.TempDir(), "bad")
 	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o600); err != nil {

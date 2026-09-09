@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"dr-charm/internal/agent"
@@ -16,6 +16,8 @@ import (
 	"dr-charm/internal/presentation"
 	"dr-charm/internal/telemetry"
 	"dr-charm/internal/terminaltext"
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type gameSession interface {
@@ -50,7 +52,8 @@ type EnhancedModel struct {
 	pendingTranscript        []string
 	drainScheduled           bool
 
-	input        textinput.Model
+	input        textarea.Model
+	inputLabel   string
 	history      []string
 	historyIndex int
 
@@ -95,8 +98,15 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 	if options.Context == nil {
 		options.Context = context.Background()
 	}
-	input := textinput.New()
+	input := textarea.New()
+	input.ShowLineNumbers = false
 	input.CharLimit = 4096
+	input.MaxWidth = 0
+	input.MaxHeight = 1
+	input.DynamicHeight = true
+	input.MinHeight = 1
+	input.Prompt = ""
+	input.SetWidth(1)
 	_ = input.Focus()
 	m := EnhancedModel{
 		session:        session,
@@ -134,6 +144,13 @@ func (m EnhancedModel) Init() tea.Cmd {
 }
 
 type transcriptDrainMsg struct{}
+
+type inputPasteMsg struct {
+	content string
+	err     error
+}
+
+var readInputClipboard = clipboard.ReadAll
 
 func nextTranscriptDrain() tea.Cmd { return func() tea.Msg { return transcriptDrainMsg{} } }
 
@@ -194,9 +211,18 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if m.viewMode == ViewModeHelp || m.viewMode == ViewModeTheme || m.mapNavigation {
 		return m, nil
 	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(message)
-	return m, cmd
+	if message, ok := message.(inputPasteMsg); ok {
+		if message.err != nil {
+			m.input.Err = message.err
+			return m, nil
+		}
+		return m.updateInput(tea.PasteMsg{Content: normalizeInputValue(message.content)})
+	}
+	if message, ok := message.(tea.PasteMsg); ok {
+		message.Content = normalizeInputValue(message.Content)
+		return m.updateInput(message)
+	}
+	return m.updateInput(message)
 }
 
 func (m *EnhancedModel) applySessionUpdate(update presentation.Update) {
@@ -318,6 +344,9 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 		m.panMap(message)
 		return m, nil
 	}
+	if message.Code == 'v' && message.Mod == tea.ModCtrl {
+		return m, readNormalizedInputClipboard
+	}
 
 	switch message.Code {
 	case tea.KeyEnter:
@@ -333,13 +362,11 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 		return m, nil
 	}
 
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(message)
-	return m, cmd
+	return m.updateInput(message)
 }
 
 func (m EnhancedModel) mapVisible() bool {
-	return calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt).mapVisible
+	return calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.inputLabel).mapVisible
 }
 
 func (m *EnhancedModel) panMap(message tea.KeyPressMsg) {
@@ -378,6 +405,32 @@ func (m EnhancedModel) sendInput() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m EnhancedModel) updateInput(message tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(message)
+	m.repositionInput()
+	return m, cmd
+}
+
+func readNormalizedInputClipboard() tea.Msg {
+	content, err := readInputClipboard()
+	return inputPasteMsg{content: content, err: err}
+}
+
+func normalizeInputValue(value string) string {
+	return strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\t", " ").Replace(value)
+}
+
+func (m *EnhancedModel) setInputValue(value string) {
+	m.input.SetValue(normalizeInputValue(value))
+	m.repositionInput()
+}
+
+func (m *EnhancedModel) repositionInput() {
+	_ = m.input.View()
+	m.input.SetHeight(m.input.Height())
+}
+
 func (m *EnhancedModel) sendCommand(original, prefix string, remember bool) bool {
 	command := m.triggers.ProcessCommand(original)
 	if err := m.session.Send(command); err != nil {
@@ -411,7 +464,7 @@ func (m *EnhancedModel) previousHistory() {
 		return
 	}
 	m.historyIndex--
-	m.input.SetValue(m.history[m.historyIndex])
+	m.setInputValue(m.history[m.historyIndex])
 }
 
 func (m *EnhancedModel) nextHistory() {
@@ -420,7 +473,7 @@ func (m *EnhancedModel) nextHistory() {
 	}
 	if m.historyIndex < len(m.history)-1 {
 		m.historyIndex++
-		m.input.SetValue(m.history[m.historyIndex])
+		m.setInputValue(m.history[m.historyIndex])
 		return
 	}
 	m.historyIndex = len(m.history)
@@ -526,11 +579,11 @@ func (m EnhancedModel) renderThemeSelector() string {
 }
 
 func (m EnhancedModel) modalRows() int {
-	return calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt).rows
+	return calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.inputLabel).rows
 }
 
 func (m EnhancedModel) modalBodyRows() int {
-	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt)
+	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.inputLabel)
 	if geometry.chrome {
 		return max(0, geometry.rows-4)
 	}
@@ -570,7 +623,16 @@ func (m EnhancedModel) buildStatusBar() string {
 }
 
 func (m EnhancedModel) buildInput() string {
-	return m.input.View()
+	rows := strings.Split(strings.TrimSuffix(m.input.View(), "\n"), "\n")
+	indent := strings.Repeat(" ", ansi.StringWidth(m.inputLabel))
+	for index := range rows {
+		if index == 0 {
+			rows[index] = m.inputLabel + rows[index]
+			continue
+		}
+		rows[index] = indent + rows[index]
+	}
+	return strings.Join(rows, "\n")
 }
 
 func (m *EnhancedModel) syncInputPresentation() {
@@ -585,8 +647,10 @@ func (m *EnhancedModel) syncInputPresentation() {
 	}
 	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, resolved, label)
 	label = truncate(label, max(0, geometry.inputInterior-2))
-	m.input.Prompt = label
+	m.inputLabel = label
+	m.input.MaxHeight = geometry.inputHeight
 	m.input.SetWidth(geometry.inputWidth)
+	m.repositionInput()
 
 	fieldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(resolved.StatusBar))
 	if resolved.StatusBarBg != "" {
@@ -596,7 +660,8 @@ func (m *EnhancedModel) syncInputPresentation() {
 	styles.Focused.Text = fieldStyle
 	styles.Focused.Prompt = fieldStyle
 	styles.Focused.Placeholder = fieldStyle
-	styles.Focused.Suggestion = fieldStyle
+	styles.Focused.CursorLine = fieldStyle
+	styles.Focused.EndOfBuffer = fieldStyle
 	styles.Blurred = styles.Focused
 	styles.Cursor.Color = lipgloss.Color(resolved.StatusBar)
 	m.input.SetStyles(styles)
@@ -762,27 +827,27 @@ func (m *EnhancedModel) finishEditor(message editorFinishedMsg) {
 		message.removeErr = removeEditorFile(message.path)
 	}
 	if message.err != nil {
-		m.input.SetValue(message.draft)
+		m.setInputValue(message.draft)
 		m.appendSystem("editor failed: " + terminaltext.Sanitize(combineErrors(message.err, message.removeErr)))
 		return
 	}
 	if readErr != nil {
-		m.input.SetValue(message.draft)
+		m.setInputValue(message.draft)
 		m.appendSystem("editor failed: " + terminaltext.Sanitize(combineErrors(readErr, message.removeErr)))
 		return
 	}
 	if message.removeErr != nil {
-		m.input.SetValue(message.draft)
+		m.setInputValue(message.draft)
 		m.appendSystem("editor failed: " + terminaltext.Sanitize(message.removeErr.Error()))
 		return
 	}
 	value := strings.TrimRight(string(data), "\r\n")
 	if strings.ContainsAny(value, "\r\n") {
-		m.input.SetValue(message.draft)
+		m.setInputValue(message.draft)
 		m.appendSystem("editor returned more than one line")
 		return
 	}
-	m.input.SetValue(value)
+	m.setInputValue(value)
 }
 
 func combineErrors(primary, cleanup error) string {

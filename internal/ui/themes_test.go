@@ -102,7 +102,7 @@ func TestBuiltinThemesRenderStatusAndInputPairs(t *testing.T) {
 		}
 		view := renderDashboard(60, 30, presentation.Update{}, "READY", "Command > ", []string{"@"}, 0, 0, false, catalog.current())
 		rows := strings.Split(view, "\n")
-		for _, row := range []string{rows[1], rows[2]} {
+		for _, row := range []string{rows[1], rows[3]} {
 			if !strings.Contains(row, want.sequence) {
 				t.Fatalf("theme %q strip pair missing: %q", catalog.current().Name, row)
 			}
@@ -154,7 +154,10 @@ func TestThemeSelectorUsesCatalogOrderAndNavigation(t *testing.T) {
 	directory := t.TempDir()
 	writeThemeFile(t, directory, "10-zulu.json", `{"name":"zulu"}`)
 	writeThemeFile(t, directory, "20-alpha.json", `{"name":"alpha"}`)
-	model := EnhancedModel{themes: newThemeCatalog(directory), width: 80, height: 24, mapOutput: []string{"@", "|", "o", "|", "o", "|", "o", "|"}}
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.themes = newThemeCatalog(directory)
+	model.width, model.height = 80, 24
+	model.mapOutput = []string{"@", "|", "o", "|", "o", "|", "o", "|"}
 
 	view := model.renderThemeSelector()
 	positions := make([]int, 0, 5)
@@ -185,7 +188,8 @@ func TestCompactThemeSelectorKeepsTitleAndSelectedMarker(t *testing.T) {
 }
 
 func TestThemeSelectorShiftGSelectsLastTheme(t *testing.T) {
-	model := EnhancedModel{themes: newThemeCatalog(""), width: 80, height: 24}
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 80, 24
 	model.themes.currentIndex = 1
 	model = model.handleThemeKeys(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModShift}))
 	if got, want := model.themes.current().Name, "high-contrast"; got != want {
