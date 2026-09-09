@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,19 +202,46 @@ func TestNativeTerminalTabInsertion(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	complete := capture("-J", "-S", "-1000")
-	assertOrderedOnce(t, complete, []string{
-		"TAB-CONTROL 1234567ABCDEFGHIJKLM CONTROL-TAIL",
-		"TAB-ONE 1234567\tABCDEFGHIJKLM TAB-TAIL",
-		"TAB-MULTIPLE 1\t2\t3 MULTIPLE-TAIL",
-		"TAB-WIDE 1234567\t界界界界界界 WIDE-TAIL",
-		strings.Repeat("m", 17) + "\t",
-		strings.Repeat("n", 17) + "\tA",
+	complete := normalizeTmuxPhysicalCapture(capture("-S", "-1000"), 20)
+	wantRows := []string{
+		"TAB-CONTROL 1234567A",
+		"BCDEFGHIJKLM CONTROL",
+		"-TAIL",
+		"TAB-ONE 1234567 ABCD",
+		"EFGHIJKLM TAB-TAIL",
+		"TAB-MULTIPLE 1  2  3",
+		" MULTIPLE-TAIL",
+		"TAB-WIDE 1234567",
+		"界界界界界界 WIDE-TA",
+		"IL",
+		strings.Repeat("m", 17),
+		strings.Repeat("n", 17) + "  A",
 		strings.Repeat("p", 20),
-		strings.Repeat("q", 20) + "A",
-		strings.Repeat("a", 19) + "界" + strings.Repeat("b", 19),
+		strings.Repeat("q", 20),
+		"A",
+		strings.Repeat("a", 19),
+		"界" + strings.Repeat("b", 18),
+		"b",
 		"TAB-AFTER",
-	})
+	}
+	rows := strings.Split(complete, "\n")
+	start := slices.Index(rows, wantRows[0])
+	if start < 0 || start+len(wantRows) > len(rows) || !slices.Equal(rows[start:start+len(wantRows)], wantRows) {
+		t.Fatalf("tab fixture physical rows differ\ngot:\n%s\nwant:\n%s", complete, strings.Join(wantRows, "\n"))
+	}
+	wantCounts := make(map[string]int, len(wantRows))
+	gotCounts := make(map[string]int, len(wantRows))
+	for _, row := range wantRows {
+		wantCounts[row]++
+	}
+	for _, row := range rows {
+		if _, ok := wantCounts[row]; ok {
+			gotCounts[row]++
+		}
+	}
+	if !maps.Equal(gotCounts, wantCounts) {
+		t.Fatalf("tab fixture physical row counts=%v, want %v\n%s", gotCounts, wantCounts, complete)
+	}
 	pane := capture()
 	lastTitle := fmt.Sprintf("[Mixed Hall %02d]", len(nativeTabRecords())-1)
 	if !strings.Contains(pane, "Command >") || !strings.Contains(pane, lastTitle) {
@@ -337,6 +365,72 @@ func nativeTabRecords() []string {
 		strings.Repeat("q", 20) + "\tA",
 		strings.Repeat("a", 19) + "界" + strings.Repeat("b", 19),
 		"TAB-AFTER",
+	}
+}
+
+func normalizeTmuxPhysicalCapture(capture string, width int) string {
+	rows := strings.Split(capture, "\n")
+	for index, row := range rows {
+		var normalized strings.Builder
+		column := 0
+		for len(row) > 0 {
+			if row[0] == '\t' {
+				row = row[1:]
+				if column >= width {
+					continue
+				}
+				nextStop := column + 8 - column%8
+				if nextStop >= width {
+					nextStop = width - 1
+				}
+				normalized.WriteString(strings.Repeat(" ", nextStop-column))
+				column = nextStop
+				continue
+			}
+
+			cluster, clusterWidth := ansi.FirstGraphemeCluster(row, ansi.GraphemeWidth)
+			if cluster == "" {
+				break
+			}
+			normalized.WriteString(cluster)
+			column += clusterWidth
+			row = row[len(cluster):]
+		}
+		rows[index] = strings.TrimRight(normalized.String(), " ")
+	}
+	return strings.Join(rows, "\n")
+}
+
+func TestNormalizeTmuxPhysicalCapture(t *testing.T) {
+	macOS := strings.Join([]string{
+		"TAB-ONE 1234567\tABCD",
+		"TAB-MULTIPLE 1\t2\t3",
+		"TAB-WIDE 1234567\t",
+		"界\tA COUNTER-TA",
+		strings.Repeat("m", 17) + "\t",
+		strings.Repeat("n", 17) + "\tA",
+	}, "\n")
+	linux := strings.Join([]string{
+		"TAB-ONE 1234567 ABCD",
+		"TAB-MULTIPLE 1  2  3",
+		"TAB-WIDE 1234567",
+		"界      A COUNTER-TA",
+		strings.Repeat("m", 17),
+		strings.Repeat("n", 17) + "  A",
+	}, "\n")
+	if got := normalizeTmuxPhysicalCapture(macOS, 20); got != linux {
+		t.Fatalf("normalized macOS capture=%q, want Linux cell text %q", got, linux)
+	}
+	if got := normalizeTmuxPhysicalCapture(linux, 20); got != linux {
+		t.Fatalf("normalized Linux capture=%q, want unchanged cell text %q", got, linux)
+	}
+	for _, changed := range []string{
+		strings.Replace(linux, "  2", " 2", 1),
+		strings.Replace(linux, "界", "好", 1),
+	} {
+		if normalizeTmuxPhysicalCapture(changed, 20) == linux {
+			t.Fatalf("normalization hid changed capture %q", changed)
+		}
 	}
 }
 

@@ -173,6 +173,19 @@ func TestInsertAboveUsesWrappedIncomingRows(t *testing.T) {
 	}
 }
 
+func TestInsertAbovePreservesTabBytes(t *testing.T) {
+	var output bytes.Buffer
+	renderer := newInsertAboveTestRenderer(t, &output, 20)
+	record := "TAB-ONE 1234567\tABCDEFGHIJKLM TAB-TAIL"
+
+	if err := renderer.insertAbove(record); err != nil {
+		t.Fatalf("insert tab record: %v", err)
+	}
+	if got := output.String(); !strings.Contains(got, record) {
+		t.Fatalf("inserted output %q does not contain raw record %q", got, record)
+	}
+}
+
 func TestTerminalLineWidthUsesEightColumnTabStops(t *testing.T) {
 	for _, test := range []struct {
 		name  string
