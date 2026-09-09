@@ -96,9 +96,7 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 		options.Context = context.Background()
 	}
 	input := textinput.New()
-	input.Prompt = "> "
 	input.CharLimit = 4096
-	input.SetWidth(70)
 	_ = input.Focus()
 	m := EnhancedModel{
 		session:        session,
@@ -119,6 +117,7 @@ func InitialEnhancedModel(session gameSession, options Options) EnhancedModel {
 	if options.Agent != nil {
 		m.agent.client = options.Agent
 	}
+	m.syncInputPresentation()
 	for _, warning := range m.themes.warnings {
 		m.appendSystem("theme warning: " + terminaltext.Sanitize(warning.Error()))
 	}
@@ -147,7 +146,7 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = message.Width
 		m.height = message.Height
 		m.dimensionsReceived = true
-		m.input.SetWidth(max(message.Width-2, 1))
+		m.syncInputPresentation()
 		return m, m.scheduleTranscript()
 	case transcriptDrainMsg:
 		if len(m.pendingTranscript) == 0 {
@@ -163,6 +162,7 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case presentation.Update:
 		wasReady := m.snapshot.Connection == presentation.Ready
 		m.applySessionUpdate(message)
+		m.syncInputPresentation()
 		if wasReady && message.Connection != presentation.Ready {
 			m.cancelAgent()
 		}
@@ -269,6 +269,7 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 		return m, nil
 	case tea.KeyF6:
 		m.toggleAgent()
+		m.syncInputPresentation()
 		return m, nil
 	case tea.KeyTab:
 		m.mapNavigation = false
@@ -276,11 +277,12 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 	}
 
 	if m.viewMode == ViewModeHelp {
-		if message.Code == tea.KeyUp || message.Code == 'k' {
+		code := modalNavigationCode(message)
+		if code == tea.KeyUp || code == 'k' {
 			m.modalOffset = max(0, m.modalOffset-1)
 			return m, nil
 		}
-		if message.Code == tea.KeyDown || message.Code == 'j' {
+		if code == tea.KeyDown || code == 'j' {
 			m.modalOffset++
 			return m, nil
 		}
@@ -292,11 +294,11 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 			m.modalOffset += m.modalRows() / 2
 			return m, nil
 		}
-		if message.Code == 'g' {
+		if code == 'g' {
 			m.modalOffset = 0
 			return m, nil
 		}
-		if message.Code == 'G' {
+		if code == 'G' {
 			m.modalOffset = 1 << 30
 			return m, nil
 		}
@@ -337,12 +339,11 @@ func (m EnhancedModel) handleKeyPress(message tea.KeyPressMsg) (tea.Model, tea.C
 }
 
 func (m EnhancedModel) mapVisible() bool {
-	_, visible := dashboardRows(m.width, m.height, m.snapshot, m.buildStatusBar(), m.buildInput(), m.mapOutput, m.mapPanLine, m.mapPanColumn, m.mapNavigation)
-	return visible
+	return calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt).mapVisible
 }
 
 func (m *EnhancedModel) panMap(message tea.KeyPressMsg) {
-	switch message.Code {
+	switch modalNavigationCode(message) {
 	case tea.KeyEscape, tea.KeyTab:
 		m.mapNavigation = false
 	case 'h':
@@ -427,7 +428,7 @@ func (m *EnhancedModel) nextHistory() {
 }
 
 func (m EnhancedModel) handleThemeKeys(message tea.KeyPressMsg) EnhancedModel {
-	switch message.Code {
+	switch modalNavigationCode(message) {
 	case tea.KeyUp, 'k':
 		m.themes.previous()
 	case tea.KeyDown, 'j':
@@ -451,7 +452,15 @@ func (m EnhancedModel) handleThemeKeys(message tea.KeyPressMsg) EnhancedModel {
 	case tea.KeyEnter, tea.KeyEscape:
 		m.viewMode = ViewModeSingle
 	}
+	m.syncInputPresentation()
 	return m
+}
+
+func modalNavigationCode(message tea.KeyPressMsg) rune {
+	if message.Code == 'g' && message.Mod.Contains(tea.ModShift) {
+		return 'G'
+	}
+	return message.Code
 }
 
 func (m *EnhancedModel) appendSystem(text string) {
@@ -486,6 +495,7 @@ func (m EnhancedModel) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
+	m.syncInputPresentation()
 	var content string
 	switch m.viewMode {
 	case ViewModeHelp:
@@ -499,11 +509,11 @@ func (m EnhancedModel) View() tea.View {
 }
 
 func (m EnhancedModel) renderHelp() string {
-	return m.renderModal([]string{"Help", "F1  help", "F3  theme", "F4  logging", "F6  auto mode", "Esc map navigation", "Tab/Esc input focus", "h/j/k/l map pan", "Ctrl-U/D map pan", "g/G map top/bottom", "Up/Down command history", "Ctrl-G edit input", "Ctrl-C quit", "Esc close"}, m.modalOffset)
+	return m.renderModal("Help", []string{"F1  help", "F3  theme", "F4  logging", "F6  auto mode", "Esc map navigation", "Tab/Esc input focus", "h/j/k/l map pan", "Ctrl-U/D map pan", "g/G map top/bottom", "Up/Down command history", "Ctrl-G edit input", "Ctrl-C quit", "Esc close"}, m.modalOffset)
 }
 
 func (m EnhancedModel) renderThemeSelector() string {
-	lines := []string{"Theme  Up/Down select  Enter/Esc close"}
+	lines := make([]string, 0, len(m.themes.themes))
 	current := m.themes.current().Name
 	for _, name := range m.themes.names() {
 		prefix := "    "
@@ -512,19 +522,23 @@ func (m EnhancedModel) renderThemeSelector() string {
 		}
 		lines = append(lines, prefix+name)
 	}
-	return m.renderModal(lines, themeOffset(lines, current, m.modalRows()))
+	return m.renderModal("Theme", lines, themeOffset(lines, current, m.modalBodyRows()))
 }
 
 func (m EnhancedModel) modalRows() int {
-	footer := renderDashboard(m.width, m.height, m.snapshot, m.buildStatusBar(), m.buildInput(), m.mapOutput, m.mapPanLine, m.mapPanColumn, m.mapNavigation, m.themes.current())
-	return max(1, len(strings.Split(footer, "\n")))
+	return calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt).rows
 }
 
-func (m EnhancedModel) renderModal(lines []string, offset int) string {
-	rows := m.modalRows()
-	offset = min(max(offset, 0), max(0, len(lines)-rows))
-	visible := lines[offset:min(len(lines), offset+rows)]
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.themes.current().Foreground)).Width(m.width).Height(rows).Render(strings.Join(visible, "\n"))
+func (m EnhancedModel) modalBodyRows() int {
+	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt)
+	if geometry.chrome {
+		return max(1, geometry.rows-4)
+	}
+	return max(1, geometry.rows-1)
+}
+
+func (m EnhancedModel) renderModal(title string, lines []string, offset int) string {
+	return renderModal(m.width, m.height, len(m.mapOutput) > 0, title, lines, offset, m.themes.current())
 }
 
 func themeOffset(lines []string, current string, rows int) int {
@@ -556,16 +570,36 @@ func (m EnhancedModel) buildStatusBar() string {
 }
 
 func (m EnhancedModel) buildInput() string {
-	if m.agent.enabled {
-		m.input.Prompt = "whisper> "
-		return m.input.View()
-	}
-	prompt := m.snapshot.Prompt
-	if prompt == "" {
-		prompt = ">"
-	}
-	m.input.Prompt = prompt + " "
 	return m.input.View()
+}
+
+func (m *EnhancedModel) syncInputPresentation() {
+	resolved := m.themes.current().presentation()
+	label := "Whisper > "
+	if !m.agent.enabled {
+		prompt := m.snapshot.Prompt
+		if prompt == "" {
+			prompt = ">"
+		}
+		label = "Command " + prompt + " "
+	}
+	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, resolved, label)
+	label = truncate(label, max(0, geometry.contentWidth-2))
+	m.input.Prompt = label
+	m.input.SetWidth(geometry.inputWidth)
+
+	fieldStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(resolved.StatusBar))
+	if resolved.StatusBarBg != "" {
+		fieldStyle = fieldStyle.Background(lipgloss.Color(resolved.StatusBarBg))
+	}
+	styles := m.input.Styles()
+	styles.Focused.Text = fieldStyle
+	styles.Focused.Prompt = fieldStyle
+	styles.Focused.Placeholder = fieldStyle
+	styles.Focused.Suggestion = fieldStyle
+	styles.Blurred = styles.Focused
+	styles.Cursor.Color = lipgloss.Color(resolved.StatusBar)
+	m.input.SetStyles(styles)
 }
 
 // Close flushes UI-owned resources after Bubble Tea restores the terminal.

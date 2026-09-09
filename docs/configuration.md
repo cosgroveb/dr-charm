@@ -154,7 +154,8 @@ to command entry.
 The theme directory contains JSON files. `dr-charm` loads them at startup in
 filename order after the built-in `default`, `dark`, and `high-contrast`
 themes. F3 opens the theme list. Up and Down change the selection, and Enter
-returns to the dashboard.
+or Escape returns to the dashboard. The selection previews the theme while the
+list remains open.
 
 Color values use a quoted ANSI color number from `0` through `255` or a hex
 color in `#RGB` or `#RRGGBB` form.
@@ -177,16 +178,24 @@ Each file contains one flat JSON object:
 | Key | Description |
 |---|---|
 | `name` | Theme name. This is the only required value. |
-| `foreground` | Text color. |
-| `border` | Accepted for compatibility; native scrollback does not render pane borders. |
-| `title_bar` | Accepted for compatibility; native scrollback has no title bar. |
-| `status_bar` | Accepted for compatibility; native scrollback uses `foreground` for the footer. |
-| `status_bar_bg` | Accepted for compatibility; native scrollback has no footer background. |
-| `border_type` | Accepted for compatibility; native scrollback does not render borders. |
-| `padding` | Accepted for compatibility; native scrollback does not render pane padding. |
+| `foreground` | Dashboard text color. An empty value uses `7`. |
+| `border` | Dashboard border and divider color. An empty value uses `foreground`. |
+| `title_bar` | Top-rule title and active map-navigation color. An empty value uses `foreground`. |
+| `status_bar` | Status and command-input text color. An empty value uses `foreground`. |
+| `status_bar_bg` | Status and command-input background color. An empty value leaves the terminal background in use. |
+| `border_type` | Dashboard border style: `rounded`, `normal`, `thick`, or `double`. |
+| `padding` | Horizontal dashboard padding, clamped from `0` through `2` cells. |
 
 An empty or unknown `border_type` uses a rounded border. `dr-charm` warns and
 skips a file with an unknown key, more than one JSON value, or an empty `name`.
+On narrow or short terminals, the dashboard reduces horizontal padding and
+then removes its frame before hiding status, hand, or location rows. The game
+transcript remains unboxed.
+
+Changing the terminal width can make the terminal reflow an already displayed
+dashboard into scrollback before `dr-charm` redraws it. Those dashboard
+remnants may remain in the terminal's history. `dr-charm` preserves every game
+record and does not delete terminal history to hide the remnants.
 
 When two files use the same theme name, `dr-charm` uses the definition from the
 later filename. A custom theme can replace a built-in without moving its

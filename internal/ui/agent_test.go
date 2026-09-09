@@ -73,7 +73,7 @@ func TestAgentToggleWhisperPromptAndPresentation(t *testing.T) {
 	model.logger = logger
 	updated, command := model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
 	model = updated.(EnhancedModel)
-	if command != nil || !model.agent.enabled || model.agent.status != "idle" || !contains(model.buildInput(), "whisper> ") {
+	if command != nil || !model.agent.enabled || model.agent.status != "idle" || !contains(model.buildInput(), "Whisper > ") {
 		t.Fatalf("enabled agent=%+v input=%q", model.agent, model.buildInput())
 	}
 	model.input.SetValue("hold here")

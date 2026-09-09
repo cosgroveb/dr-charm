@@ -30,7 +30,7 @@ type themeCatalog struct {
 func newThemeCatalog(themesDir string) *themeCatalog {
 	catalog := &themeCatalog{
 		themes: []theme{
-			{Name: "default", Foreground: "7", Border: "62", TitleBar: "170", StatusBar: "240", StatusBarBg: "235", BorderType: "rounded", Padding: 1},
+			{Name: "default", Foreground: "7", Border: "62", TitleBar: "170", StatusBar: "252", StatusBarBg: "235", BorderType: "rounded", Padding: 1},
 			{Name: "dark", Foreground: "252", Border: "237", TitleBar: "33", StatusBar: "252", StatusBarBg: "237", BorderType: "rounded", Padding: 1},
 			{Name: "high-contrast", Foreground: "15", Border: "15", TitleBar: "226", StatusBar: "0", StatusBarBg: "15", BorderType: "thick", Padding: 1},
 		},
@@ -38,6 +38,29 @@ func newThemeCatalog(themesDir string) *themeCatalog {
 	}
 	catalog.loadCustomThemes(themesDir)
 	return catalog
+}
+
+func (t theme) presentation() theme {
+	resolved := t
+	if resolved.Foreground == "" {
+		resolved.Foreground = "7"
+	}
+	if resolved.Border == "" {
+		resolved.Border = resolved.Foreground
+	}
+	if resolved.TitleBar == "" {
+		resolved.TitleBar = resolved.Foreground
+	}
+	if resolved.StatusBar == "" {
+		resolved.StatusBar = resolved.Foreground
+	}
+	resolved.Padding = min(max(resolved.Padding, 0), 2)
+	switch resolved.BorderType {
+	case "normal", "thick", "double", "rounded":
+	default:
+		resolved.BorderType = "rounded"
+	}
+	return resolved
 }
 
 func (c *themeCatalog) loadCustomThemes(themesDir string) {

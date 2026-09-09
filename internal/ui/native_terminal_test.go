@@ -6,13 +6,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"dr-charm/internal/agent"
 	"dr-charm/internal/presentation"
+	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestNativeTerminalHelper is launched by TestNativeTerminalScrollback inside
@@ -22,6 +27,14 @@ func TestNativeTerminalHelper(t *testing.T) {
 	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") != "1" {
 		return
 	}
+	if path := os.Getenv("DR_CHARM_NATIVE_PID_FILE"); path != "" {
+		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previousProfile := lipgloss.Writer.Profile
+	lipgloss.Writer.Profile = colorprofile.ANSI256
+	t.Cleanup(func() { lipgloss.Writer.Profile = previousProfile })
 	updates := make(chan presentation.Update, 3)
 	first := presentation.Update{
 		Connection: presentation.Ready,
@@ -38,6 +51,13 @@ func TestNativeTerminalHelper(t *testing.T) {
 			{Pane: presentation.Game, Text: "REPLACE-ONE", Operation: presentation.Replace},
 		},
 		Notices: []presentation.Notice{{Text: "SYSTEM-ONE"}},
+	}
+	if os.Getenv("DR_CHARM_NATIVE_EXACT_WIDTH") == "60" {
+		first.Entries = append(first.Entries,
+			presentation.Entry{Pane: presentation.Game, Text: nativeTerminalExactWidthRecord(60), Operation: presentation.Append},
+			presentation.Entry{Pane: presentation.Game, Text: nativeTerminalExactWidthRecord(120), Operation: presentation.Append},
+			presentation.Entry{Pane: presentation.Game, Text: "AFTER-EXACT-WIDTH", Operation: presentation.Append},
+		)
 	}
 	for number := 0; number < 36; number++ {
 		first.Entries = append(first.Entries, presentation.Entry{Pane: presentation.Game, Text: fmt.Sprintf("TALL-%02d", number), Operation: presentation.Append})
@@ -75,8 +95,8 @@ func TestNativeTerminalHelper(t *testing.T) {
 			}
 			updates <- readyUpdate(seed)
 		case "boundary-advance":
-			advance := make([]presentation.Entry, 0, 14)
-			for number := 0; number < 14; number++ {
+			advance := make([]presentation.Entry, 0, 11)
+			for number := 0; number < 11; number++ {
 				advance = append(advance, presentation.Entry{Pane: presentation.Game, Text: fmt.Sprintf("BOUNDARY-ADVANCE-%02d", number), Operation: presentation.Append})
 			}
 			updates <- readyUpdate(advance)
@@ -86,13 +106,20 @@ func TestNativeTerminalHelper(t *testing.T) {
 				flush = append(flush, presentation.Entry{Pane: presentation.Game, Text: fmt.Sprintf("FLUSH-%02d", number), Operation: presentation.Append})
 			}
 			updates <- readyUpdate(flush)
+		case "post-resize":
+			updates <- readyUpdate([]presentation.Entry{{Pane: presentation.Game, Text: nativeTerminalPostResizeRecord(), Operation: presentation.Append}})
+		case "post-repaint":
+			updates <- readyUpdate([]presentation.Entry{{Pane: presentation.Game, Text: "POST-REPAINT-ONE", Operation: presentation.Append}})
+		case "post-editor":
+			updates <- readyUpdate([]presentation.Entry{{Pane: presentation.Game, Text: "POST-EDITOR-ONE", Operation: presentation.Append}})
+		case "close":
 			close(updates)
 		}
 	}
-	model := InitialEnhancedModel(session, Options{Context: context.Background()})
+	model := InitialEnhancedModel(session, Options{Context: context.Background(), ThemeDir: os.Getenv("DR_CHARM_NATIVE_THEME_DIR")})
 	model.agent.client = nativeTerminalAgent{}
 	model.now = func() time.Time { return time.Date(2026, 1, 1, 1, 2, 3, 0, time.UTC) }
-	program := tea.NewProgram(model)
+	program := tea.NewProgram(model, tea.WithColorProfile(colorprofile.ANSI256))
 	if _, err := program.Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +146,346 @@ func (session *nativeTerminalSession) Next() (presentation.Update, bool) {
 	return update, ok
 }
 
+func TestNativeTerminalHostResizeReflow(t *testing.T) {
+	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") == "1" {
+		return
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Fatalf("tmux is required for terminal-state proof: %v", err)
+	}
+	helper := filepath.Join(t.TempDir(), "native-ui.test")
+	if output, err := exec.Command("go", "test", "-c", "-o", helper).CombinedOutput(); err != nil {
+		t.Fatalf("prebuild host-reflow helper: %v\n%s", err, output)
+	}
+	server := fmt.Sprintf("dr-charm-native-reflow-%d", os.Getpid())
+	session := "host-reflow"
+	helperPIDFile := filepath.Join(t.TempDir(), "helper.pid")
+	tmux := func(args ...string) ([]byte, error) {
+		return exec.Command("tmux", append([]string{"-L", server}, args...)...).CombinedOutput()
+	}
+	stopped := false
+	var panePID int
+	readHelperPID := func(path string) int {
+		t.Helper()
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read host-reflow helper PID: %v", err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+		if err != nil {
+			t.Fatalf("parse host-reflow helper PID %q: %v", contents, err)
+		}
+		return pid
+	}
+	waitForStopped := func(pid int) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			output, err := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).CombinedOutput()
+			if err != nil {
+				t.Fatalf("read stopped helper state: %v\n%s", err, output)
+			}
+			if strings.HasPrefix(strings.TrimSpace(string(output)), "T") {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("host-reflow helper PID %d never stopped; state=%q", pid, output)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	t.Cleanup(func() {
+		if stopped {
+			_ = syscall.Kill(panePID, syscall.SIGCONT)
+		}
+		_, _ = tmux("kill-server")
+	})
+	helperCommand := fmt.Sprintf("DR_CHARM_NATIVE_TERMINAL_HELPER=1 DR_CHARM_NATIVE_PID_FILE=%s %s -test.run '^TestNativeTerminalHelper$' -test.count=1 </dev/tty & wait", shellQuote(helperPIDFile), shellQuote(helper))
+	if output, err := tmux("new-session", "-d", "-x", "100", "-y", "30", "-s", session, "sh", "-c", helperCommand); err != nil {
+		t.Fatalf("start host-reflow helper: %v\n%s", err, output)
+	}
+	capture := func(args ...string) string {
+		t.Helper()
+		output, err := tmux(append([]string{"capture-pane", "-p", "-t", session}, args...)...)
+		if err != nil {
+			t.Fatalf("capture host-reflow pane: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+	waitVisible := func(predicate func(string) bool, description string) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			visible := capture()
+			if predicate(visible) {
+				return visible
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("host-reflow pane never rendered %s\n%s", description, visible)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "initial dashboard")
+	beforeComplete := capture("-J", "-S", "-1000")
+	beforeHistory := capture("-S", "-1000", "-E", "-1")
+	assertInitialNativeTranscript(t, beforeComplete)
+	assertNativeHistory(t, beforeHistory)
+
+	panePID = readHelperPID(helperPIDFile)
+	if err := syscall.Kill(panePID, syscall.SIGSTOP); err != nil {
+		t.Fatalf("stop host-reflow helper: %v", err)
+	}
+	stopped = true
+	waitForStopped(panePID)
+	if output, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "30"); err != nil {
+		t.Fatalf("resize stopped helper to 44 columns: %v\n%s", err, output)
+	}
+	waitForStopped(panePID)
+	reflow44History := capture("-S", "-1000", "-E", "-1")
+	if !strings.Contains(reflow44History, "[Test Hall]") || lineCount(reflow44History) <= lineCount(beforeHistory) {
+		t.Fatalf("44-column host reflow did not retain dashboard fragments in history\nbefore:\n%s\nafter:\n%s", beforeHistory, reflow44History)
+	}
+	if output, err := tmux("resize-window", "-t", session, "-x", "10", "-y", "30"); err != nil {
+		t.Fatalf("resize stopped helper to 10 columns: %v\n%s", err, output)
+	}
+	waitForStopped(panePID)
+	reflow10History := capture("-S", "-1000", "-E", "-1")
+	if lineCount(reflow10History) <= lineCount(reflow44History) || !strings.Contains(reflow10History, "│ Command") {
+		t.Fatalf("10-column host reflow did not expand retained dashboard fragments\n44 columns:\n%s\n10 columns:\n%s", reflow44History, reflow10History)
+	}
+	if output, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "30"); err != nil {
+		t.Fatalf("restore stopped helper to 44 columns: %v\n%s", err, output)
+	}
+	waitForStopped(panePID)
+	if err := syscall.Kill(panePID, syscall.SIGCONT); err != nil {
+		t.Fatalf("resume host-reflow helper: %v", err)
+	}
+	stopped = false
+	resumedPane := waitVisible(func(visible string) bool {
+		tops, bottoms := nativeCompleteDashboardBounds(visible, 44)
+		return tops == 1 && bottoms == 1 && nativeDashboardBottomComplete(visible, 44)
+	}, "bounded 44-column repaint")
+	boundedTopRows, boundedBottomRows := nativeCompleteDashboardBounds(resumedPane, 44)
+	if boundedTopRows != 1 || boundedBottomRows != 1 {
+		t.Fatalf("resumed repaint contained bounded tops=%d bottoms=%d, want 1 each\n%s", boundedTopRows, boundedBottomRows, resumedPane)
+	}
+	resumedComplete := capture("-J", "-S", "-1000")
+	assertInitialNativeTranscript(t, resumedComplete)
+	if output, err := tmux("send-keys", "-t", session, "F1"); err != nil {
+		t.Fatalf("settle Help after host reflow: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Help") }, "settling Help after host reflow")
+	if output, err := tmux("send-keys", "-t", session, "Escape"); err != nil {
+		t.Fatalf("settle dashboard after host reflow: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "settling dashboard after Help")
+	stableHistory := capture("-S", "-1000", "-E", "-1")
+	if output, err := tmux("send-keys", "-t", session, "F1"); err != nil {
+		t.Fatalf("open settled Help after host reflow: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Help") }, "settled Help after host reflow")
+	if output, err := tmux("send-keys", "-t", session, "Escape"); err != nil {
+		t.Fatalf("close settled Help after host reflow: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "settled dashboard after Help")
+	if afterStableModes := capture("-S", "-1000", "-E", "-1"); afterStableModes != stableHistory {
+		t.Fatalf("stable-geometry mode repaint changed history\nbefore:\n%s\nafter:\n%s", stableHistory, afterStableModes)
+	}
+	if output, err := tmux("kill-session", "-t", session); err != nil {
+		t.Fatalf("stop first host-reflow session: %v\n%s", err, output)
+	}
+	session = "direct-narrow"
+	directPIDFile := filepath.Join(t.TempDir(), "direct-helper.pid")
+	directCommand := fmt.Sprintf("DR_CHARM_NATIVE_TERMINAL_HELPER=1 DR_CHARM_NATIVE_PID_FILE=%s %s -test.run '^TestNativeTerminalHelper$' -test.count=1 </dev/tty & wait", shellQuote(directPIDFile), shellQuote(helper))
+	if output, err := tmux("new-session", "-d", "-x", "100", "-y", "30", "-s", session, "sh", "-c", directCommand); err != nil {
+		t.Fatalf("start direct-narrow helper: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "direct-narrow initial dashboard")
+	directBeforeHistory := capture("-S", "-1000", "-E", "-1")
+	assertNativeHistory(t, directBeforeHistory)
+	assertInitialNativeTranscript(t, capture("-J", "-S", "-1000"))
+	panePID = readHelperPID(directPIDFile)
+	if err := syscall.Kill(panePID, syscall.SIGSTOP); err != nil {
+		t.Fatalf("stop direct-narrow helper: %v", err)
+	}
+	stopped = true
+	waitForStopped(panePID)
+	if output, err := tmux("resize-window", "-t", session, "-x", "10", "-y", "30"); err != nil {
+		t.Fatalf("resize stopped helper directly to 10 columns: %v\n%s", err, output)
+	}
+	waitForStopped(panePID)
+	direct10History := capture("-S", "-1000", "-E", "-1")
+	if lineCount(direct10History) <= lineCount(directBeforeHistory) || !strings.Contains(direct10History, "│ Command") {
+		t.Fatalf("direct 100-to-10 host reflow did not retain expanded dashboard fragments\nbefore:\n%s\nafter:\n%s", directBeforeHistory, direct10History)
+	}
+	if err := syscall.Kill(panePID, syscall.SIGCONT); err != nil {
+		t.Fatalf("resume direct-narrow helper: %v", err)
+	}
+	stopped = false
+	waitVisible(func(visible string) bool {
+		for _, line := range strings.Split(visible, "\n") {
+			if line == "Command…" {
+				return true
+			}
+		}
+		return false
+	}, "bounded direct 10-column repaint")
+	assertInitialNativeTranscript(t, capture("-J", "-S", "-1000"))
+	if output, err := tmux("send-keys", "-t", session, "F1"); err != nil {
+		t.Fatalf("settle narrow Help after direct resize: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Help") }, "settling narrow Help after direct resize")
+	if output, err := tmux("send-keys", "-t", session, "Escape"); err != nil {
+		t.Fatalf("settle narrow dashboard after direct resize: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command…") }, "settling narrow dashboard after Help")
+	directStableHistory := capture("-S", "-1000", "-E", "-1")
+	if output, err := tmux("send-keys", "-t", session, "F1"); err != nil {
+		t.Fatalf("open settled narrow Help after direct resize: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Help") }, "settled narrow Help after direct resize")
+	if output, err := tmux("send-keys", "-t", session, "Escape"); err != nil {
+		t.Fatalf("close settled narrow Help after direct resize: %v\n%s", err, output)
+	}
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command…") }, "settled narrow dashboard after Help")
+	if afterDirectModes := capture("-S", "-1000", "-E", "-1"); afterDirectModes != directStableHistory {
+		t.Fatalf("direct narrow stable repaint changed history\nbefore:\n%s\nafter:\n%s", directStableHistory, afterDirectModes)
+	}
+
+	if directory := os.Getenv("DR_CHARM_TERMINAL_ARTIFACT_DIR"); directory != "" {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for name, contents := range map[string]string{
+			"host-reflow-100x30-before-history.txt":        beforeHistory,
+			"host-reflow-44x30-stopped-history.txt":        reflow44History,
+			"host-reflow-10x30-stopped-history.txt":        reflow10History,
+			"host-reflow-44x30-resumed-history.txt":        stableHistory,
+			"host-reflow-direct-10x30-stopped-history.txt": direct10History,
+			"host-reflow-direct-10x30-resumed-history.txt": directStableHistory,
+		} {
+			if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestNativeTerminalFixedGeometry(t *testing.T) {
+	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") == "1" {
+		return
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Fatalf("tmux is required for terminal-state proof: %v", err)
+	}
+	helper := filepath.Join(t.TempDir(), "native-ui.test")
+	if output, err := exec.Command("go", "test", "-c", "-o", helper).CombinedOutput(); err != nil {
+		t.Fatalf("prebuild fixed-geometry helper: %v\n%s", err, output)
+	}
+	server := fmt.Sprintf("dr-charm-native-fixed-%d", os.Getpid())
+	tmux := func(args ...string) ([]byte, error) {
+		return exec.Command("tmux", append([]string{"-L", server}, args...)...).CombinedOutput()
+	}
+	t.Cleanup(func() { _, _ = tmux("kill-server") })
+	artifactDirectory := os.Getenv("DR_CHARM_TERMINAL_ARTIFACT_DIR")
+	if artifactDirectory != "" {
+		if err := os.MkdirAll(artifactDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tests := []struct {
+		name, width, height, input, artifact string
+		contains                             []string
+		absent                               []string
+		exactWidth                           bool
+	}{
+		{name: "full", width: "100", height: "30", input: "Command >", contains: []string{"╭", "38;5;62", "38;5;170", "38;5;252", "48;5;235"}},
+		{name: "compact-map", width: "100", height: "19", input: "Command >", artifact: "100x19-compact-map", contains: []string{"o---@", "38;5;252", "48;5;235"}, absent: []string{"╭"}},
+		{name: "short", width: "60", height: "15", input: "Command >", artifact: "60x15-short", contains: []string{"38;5;252", "48;5;235"}, absent: []string{"╭", "o---@"}, exactWidth: true},
+		{name: "narrow", width: "10", height: "24", input: "Command…", artifact: "10x24-narrow", contains: []string{"o---@", "38;5;252", "48;5;235"}, absent: []string{"╭"}},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			session := fmt.Sprintf("fixed-%d", index)
+			command := []string{"new-session", "-d", "-x", test.width, "-y", test.height, "-s", session, "env", "DR_CHARM_NATIVE_TERMINAL_HELPER=1"}
+			if test.exactWidth {
+				command = append(command, "DR_CHARM_NATIVE_EXACT_WIDTH=60")
+			}
+			command = append(command, helper, "-test.run", "^TestNativeTerminalHelper$", "-test.count=1")
+			if output, err := tmux(command...); err != nil {
+				t.Fatalf("start %s helper: %v\n%s", test.name, err, output)
+			}
+			t.Cleanup(func() { _, _ = tmux("kill-session", "-t", session) })
+			capture := func(arguments ...string) string {
+				t.Helper()
+				output, err := tmux(append([]string{"capture-pane", "-p", "-t", session}, arguments...)...)
+				if err != nil {
+					t.Fatalf("capture %s pane: %v\n%s", test.name, err, output)
+				}
+				return string(output)
+			}
+			waitCapture := func(arguments []string, predicate func(string) bool, description string) string {
+				t.Helper()
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					captured := capture(arguments...)
+					if predicate(captured) {
+						return captured
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("%s pane never rendered %s\n%q", test.name, description, captured)
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+			}
+			ansiCapture := waitCapture([]string{"-e"}, func(captured string) bool {
+				if !strings.Contains(captured, test.input) {
+					return false
+				}
+				for _, value := range test.contains {
+					if !strings.Contains(captured, value) {
+						return false
+					}
+				}
+				for _, value := range test.absent {
+					if strings.Contains(captured, value) {
+						return false
+					}
+				}
+				return true
+			}, "expected geometry and ANSI256 colors")
+			complete := capture("-J", "-S", "-1000")
+			assertInitialNativeTranscript(t, complete)
+			if test.exactWidth {
+				assertOrderedOnce(t, complete, []string{nativeTerminalExactWidthRecord(60), nativeTerminalExactWidthRecord(120), "AFTER-EXACT-WIDTH"})
+			}
+			stableHistory := capture("-S", "-1000", "-E", "-1")
+			assertNativeHistory(t, stableHistory)
+			if output, err := tmux("send-keys", "-t", session, "F1"); err != nil {
+				t.Fatalf("open %s Help: %v\n%s", test.name, err, output)
+			}
+			waitCapture(nil, func(captured string) bool { return strings.Contains(captured, "Help") }, "Help")
+			if output, err := tmux("send-keys", "-t", session, "Escape", "F3"); err != nil {
+				t.Fatalf("open %s Theme: %v\n%s", test.name, err, output)
+			}
+			waitCapture(nil, func(captured string) bool { return strings.Contains(captured, "Theme") }, "Theme")
+			if output, err := tmux("send-keys", "-t", session, "Escape"); err != nil {
+				t.Fatalf("close %s Theme: %v\n%s", test.name, err, output)
+			}
+			waitCapture(nil, func(captured string) bool { return strings.Contains(captured, test.input) }, "restored dashboard")
+			if afterModes := capture("-S", "-1000", "-E", "-1"); afterModes != stableHistory {
+				t.Fatalf("%s stable mode repaint changed history\nbefore:\n%s\nafter:\n%s", test.name, stableHistory, afterModes)
+			}
+			if artifactDirectory != "" && test.artifact != "" {
+				if err := os.WriteFile(filepath.Join(artifactDirectory, test.artifact+".ansi"), []byte(ansiCapture), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestNativeTerminalScrollback(t *testing.T) {
 	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") == "1" {
 		return
@@ -132,6 +499,20 @@ func TestNativeTerminalScrollback(t *testing.T) {
 		return exec.Command("tmux", append([]string{"-L", server}, args...)...).CombinedOutput()
 	}
 	t.Cleanup(func() { _, _ = tmux("kill-server") })
+	artifactDirectory := os.Getenv("DR_CHARM_TERMINAL_ARTIFACT_DIR")
+	if artifactDirectory != "" {
+		if err := os.MkdirAll(artifactDirectory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	themeDirectory := filepath.Join(t.TempDir(), "themes")
+	if err := os.MkdirAll(themeDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	proofTheme := `{"name":"proof-chrome","foreground":"231","border":"39","title_bar":"214","status_bar":"16","status_bar_bg":"220","border_type":"double","padding":2}`
+	if err := os.WriteFile(filepath.Join(themeDirectory, "proof-chrome.json"), []byte(proofTheme), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	editorReady := filepath.Join(t.TempDir(), "editor-ready")
 	editor := filepath.Join(t.TempDir(), "editor")
 	if err := os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'EDITOR-ONE' > \"$1\"\n: > \"$DR_CHARM_EDITOR_READY\"\n"), 0o700); err != nil {
@@ -149,7 +530,7 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("prebuild terminal helper: %v\n%s", err, output)
 	}
-	command := fmt.Sprintf("DR_CHARM_NATIVE_TERMINAL_HELPER=1 DR_CHARM_EDITOR_READY=%s EDITOR=%s %s -test.run '^TestNativeTerminalHelper$' -test.count=1; exec sh", shellQuote(editorReady), shellQuote(editor), shellQuote(helper))
+	command := fmt.Sprintf("DR_CHARM_NATIVE_TERMINAL_HELPER=1 DR_CHARM_NATIVE_THEME_DIR=%s DR_CHARM_EDITOR_READY=%s EDITOR=%s %s -test.run '^TestNativeTerminalHelper$' -test.count=1; exec sh", shellQuote(themeDirectory), shellQuote(editorReady), shellQuote(editor), shellQuote(helper))
 	if out, err := tmux("new-session", "-d", "-x", "100", "-y", "30", "-s", session, command); err != nil {
 		t.Fatalf("start isolated tmux: %v\n%s", err, out)
 	}
@@ -226,6 +607,24 @@ func TestNativeTerminalScrollback(t *testing.T) {
 			time.Sleep(25 * time.Millisecond)
 		}
 	}
+	waitForClearedDashboardInput := func(submitted string, width int) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			capture, err := tmux("capture-pane", "-p", "-t", session)
+			if err != nil {
+				t.Fatalf("poll cleared dashboard input: %v\n%s", err, capture)
+			}
+			pane := string(capture)
+			if nativeDashboardInputCleared(pane, submitted, width) {
+				return pane
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("dashboard input did not clear submitted command %q\n%s", submitted, pane)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
 	waitForFile := func(path string) {
 		t.Helper()
 		deadline := time.Now().Add(10 * time.Second)
@@ -279,14 +678,44 @@ func TestNativeTerminalScrollback(t *testing.T) {
 		}
 		return string(capture)
 	}
-	sequence := nativeTerminalSequence()
-	assertCheckpoint := func(name, visible, absent string) {
+	captureANSI := func(name string, cues ...string) {
 		t.Helper()
-		complete := captureComplete()
+		deadline := time.Now().Add(10 * time.Second)
+		var capture []byte
+		for {
+			var err error
+			capture, err = tmux("capture-pane", "-e", "-p", "-t", session)
+			if err != nil {
+				t.Fatalf("capture %s ANSI terminal pane: %v\n%s", name, err, capture)
+			}
+			ready := true
+			for _, cue := range cues {
+				ready = ready && strings.Contains(string(capture), cue)
+			}
+			if ready {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("ANSI terminal pane %s never contained cues %q\n%q", name, cues, capture)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		if artifactDirectory == "" {
+			return
+		}
+		if err := os.WriteFile(filepath.Join(artifactDirectory, name+".ansi"), capture, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sequence := nativeTerminalSequence()
+	assertCheckpoint := func(name, visible, absent string, requireCleanHistory bool) {
+		t.Helper()
+		complete := captureCompleteJoined()
 		assertOrderedOnce(t, complete, sequence)
-		assertUnicodeRecord(t, captureCompleteJoined())
-		history := captureHistory()
-		assertNativeHistory(t, history)
+		assertUnicodeRecord(t, complete)
+		if requireCleanHistory {
+			assertNativeHistory(t, captureHistory())
+		}
 		pane := capturePane()
 		if !strings.Contains(pane, visible) || (absent != "" && strings.Contains(pane, absent)) {
 			t.Fatalf("%s visible pane missing %q or retained %q\n%s", name, visible, absent, pane)
@@ -300,21 +729,63 @@ func TestNativeTerminalScrollback(t *testing.T) {
 		}
 	}
 	waitFor("TALL-35")
+	send("draft-proof")
+	waitForVisible("draft-proof")
+	captureANSI("100x30-default-command", "╭", "Command >", "38;5;62", "38;5;170", "38;5;252", "48;5;235")
+	send("Escape")
+	waitForVisible("Map navigation")
+	captureANSI("100x30-map-navigation", "╭", "Map navigation", "38;5;170", "38;5;252", "48;5;235")
+	send("Tab")
+	waitForVisible("Command >")
+	send("F6")
+	waitForVisible("Whisper >")
+	captureANSI("100x30-whisper", "╭", "Whisper >", "38;5;62", "38;5;252", "48;5;235")
+	send("F6")
+	waitForVisible("Command >")
 	send("F1")
 	waitForVisible("Help")
+	captureANSI("100x30-help", "╭", "Help", "38;5;62", "38;5;170", "38;5;252", "48;5;235")
 	send("Escape")
 	waitForVisible("READY | LOG off")
 	send("F3")
 	waitForVisible("Theme")
-	send("Escape")
+	send("Down")
+	waitForVisible("> dark")
+	captureANSI("100x30-theme-dark-selected", "╭", "Theme", "> dark", "38;5;237", "38;5;33", "38;5;252", "48;5;237")
+	send("Enter")
+	waitForVisible("Command >")
+	captureANSI("100x30-dark-dashboard", "╭", "Command >", "38;5;237", "38;5;33", "38;5;252", "48;5;237")
+	send("F3")
+	waitForVisible("Theme")
+	send("Down")
+	waitForVisible("> high-contrast")
+	send("Enter")
+	captureANSI("100x30-high-contrast-dashboard", "┏", "Command >", "38;5;226", "\x1b[30m", "\x1b[107m")
+	send("F3")
+	waitForVisible("Theme")
+	send("G")
+	waitForVisible("> proof-chrome")
+	send("Enter")
+	captureANSI("100x30-proof-chrome-dashboard", "╔", "Command >", "38;5;39", "38;5;214", "38;5;16", "48;5;220")
+	send("F3")
+	waitForVisible("Theme")
+	send("g")
+	waitForVisible("> default")
+	send("Enter")
+	captureANSI("100x30-default-dashboard", "╭", "Command >", "38;5;62", "38;5;170", "38;5;252", "48;5;235")
+	if pane := capturePane(); !strings.Contains(pane, "draft-proof") {
+		t.Fatalf("modes changed command draft\n%s", pane)
+	}
+	send("C-u")
+	waitForVisibleWithout("Command >", "draft-proof")
 	waitForVisible("READY | LOG off")
 	send("F6")
-	waitForVisible("whisper>")
+	waitForVisible("Whisper >")
 	send("hello-whisper", "Enter")
 	waitFor("AGENT-ONE")
 	send("F6")
 	deadline := time.Now().Add(10 * time.Second)
-	for strings.Contains(waitForVisible("READY | LOG off"), "whisper>") {
+	for strings.Contains(waitForVisible("READY | LOG off"), "Whisper >") {
 		if time.Now().After(deadline) {
 			t.Fatal("agent mode remained enabled")
 		}
@@ -329,49 +800,84 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	boundaryBefore := captureComplete()
 	boundaryHistory := captureHistory()
 	send("boundary-advance", "Enter")
-	waitFor("BOUNDARY-ADVANCE-13")
+	waitFor("BOUNDARY-ADVANCE-10")
 	boundaryPane := capturePane()
 	boundaryAfter := captureComplete()
 	assertCaptureBoundaryRace(t, boundaryBefore, boundaryHistory, boundaryPane, boundaryAfter)
 	send("flush", "Enter")
 	waitFor("FLUSH-35")
-	waitForVisible("DISCONNECTED")
-	assertCheckpoint("before resize", "o---@", "")
+	waitForVisible("READY |")
+	assertCheckpoint("before resize", "o---@", "", true)
 	if out, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "30"); err != nil {
 		t.Fatalf("width-only resize: %v\n%s", err, out)
 	}
+	send("post-resize", "Enter")
+	postResizePrefix := strings.TrimSuffix(nativeTerminalPostResizeRecord(), "Ω")
+	waitFor(postResizePrefix)
+	waitForClearedDashboardInput("post-resize", 44)
+	sequence = append(sequence, "> post-resize", postResizePrefix, "Ω")
 	waitForVisible("o---@")
-	assertCheckpoint("width-only resize", "o---@", "")
+	assertCheckpoint("width-only resize", "o---@", "", false)
 	if out, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "18"); err != nil {
 		t.Fatalf("below-map resize: %v\n%s", err, out)
 	}
 	waitForVisibleWithout("L: shield", "o---@")
-	assertCheckpoint("below-map resize", "L: shield", "o---@")
+	assertCheckpoint("below-map resize", "L: shield", "o---@", false)
 	if out, err := tmux("resize-window", "-t", session, "-x", "100", "-y", "19"); err != nil {
 		t.Fatalf("at-map resize: %v\n%s", err, out)
 	}
 	waitForVisible("o---@")
-	assertCheckpoint("at-map resize", "o---@", "")
+	assertCheckpoint("at-map resize", "o---@", "", false)
+	if out, err := tmux("resize-window", "-t", session, "-x", "60", "-y", "15"); err != nil {
+		t.Fatalf("short resize: %v\n%s", err, out)
+	}
+	waitForVisibleWithout("Command >", "o---@")
+	if out, err := tmux("resize-window", "-t", session, "-x", "10", "-y", "24"); err != nil {
+		t.Fatalf("narrow resize: %v\n%s", err, out)
+	}
+	waitForVisible("Comman")
 	for _, size := range [][2]string{{"100", "30"}, {"44", "20"}, {"100", "30"}} {
 		if out, err := tmux("resize-window", "-t", session, "-x", size[0], "-y", size[1]); err != nil {
 			t.Fatalf("rapid resize %s×%s: %v\n%s", size[0], size[1], err, out)
 		}
 	}
-	widePane := waitForVisibleAll("o---@", "L: shield", "R: sword", "DISCONNECTED")
-	assertCheckpoint("rapid resize", "o---@", "")
-	if !strings.Contains(widePane, "L: shield") || !strings.Contains(widePane, "R: sword") || !strings.Contains(widePane, "DISCONNECTED") {
+	widePane := waitForVisibleAll("o---@", "L: shield", "R: sword", "READY |")
+	assertCheckpoint("rapid resize", "o---@", "", false)
+	if !strings.Contains(widePane, "L: shield") || !strings.Contains(widePane, "R: sword") || !strings.Contains(widePane, "READY |") {
 		t.Fatalf("wide dashboard omitted map-adjacent hands or status\n%s", widePane)
 	}
+	send("post-repaint", "Enter")
+	waitFor("POST-REPAINT-ONE")
+	waitForClearedDashboardInput("post-repaint", 100)
+	sequence = append(sequence, "> post-repaint", "POST-REPAINT-ONE")
+	assertCheckpoint("post-repaint output", "o---@", "", false)
+	settledHistory := captureHistory()
 	send("C-g")
 	waitForFile(editorReady)
 	waitForVisible("EDITOR-ONE")
-	disconnectedPane := waitForVisible("DISCONNECTED")
+	if editorHistory := captureHistory(); editorHistory != settledHistory {
+		t.Fatalf("stable-geometry editor repaint changed history\nbefore:\n%s\nafter:\n%s", settledHistory, editorHistory)
+	}
+	send("C-u")
+	waitForVisibleWithout("Command >", "EDITOR-ONE")
+	send("post-editor", "Enter")
+	waitFor("POST-EDITOR-ONE")
+	waitForClearedDashboardInput("post-editor", 100)
+	sequence = append(sequence, "> post-editor", "POST-EDITOR-ONE")
+	assertCheckpoint("post-editor output", "o---@", "", false)
+	historyAfterEditorOutput := captureHistory()
+	assertNoAdditionalNativeChrome(t, settledHistory, historyAfterEditorOutput)
+	send("close", "Enter")
+	waitForVisible("DISCONNECTED")
+	sequence = append(sequence, "> close", "[system 01:02:03] disconnected")
+	disconnectedPane := capturePane()
 	if !strings.Contains(disconnectedPane, "[Test Hall]") {
 		t.Fatalf("source close did not retain disconnected dashboard\n%s", disconnectedPane)
 	}
-	assertCheckpoint("editor completion", "DISCONNECTED", "")
+	assertCheckpoint("source close", "DISCONNECTED", "", false)
 	activeComplete := captureComplete()
 	activeHistory := captureHistory()
+	assertNoAdditionalNativeChrome(t, historyAfterEditorOutput, activeHistory)
 	if out, err := tmux("send-keys", "-t", session, "C-c"); err != nil {
 		t.Fatalf("quit: %v\n%s", err, out)
 	}
@@ -391,18 +897,24 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	}
 	postQuitComplete := captureComplete()
 	postQuitHistory := captureHistory()
-	if directory := os.Getenv("DR_CHARM_TERMINAL_ARTIFACT_DIR"); directory != "" {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
+	if artifactDirectory != "" {
 		for name, contents := range map[string]string{"terminal-active-history.txt": activeHistory} {
-			if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(artifactDirectory, name), []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
 	assertOrderedOnce(t, activeComplete, sequence)
-	assertUnicodeRecord(t, captureCompleteJoined())
+	activeJoined := captureCompleteJoined()
+	assertUnicodeRecord(t, activeJoined)
+	if count := strings.Count(activeJoined, nativeTerminalPostResizeRecord()); count != 1 {
+		t.Fatalf("joined terminal record %q count=%d, want 1\n%s", nativeTerminalPostResizeRecord(), count, activeJoined)
+	}
+	for _, command := range []string{"> post-resize", "> post-repaint", "> post-editor", "> close"} {
+		if count := strings.Count(activeComplete, command); count != 1 {
+			t.Fatalf("terminal command %q count=%d, want 1\n%s", command, count, activeComplete)
+		}
+	}
 	for _, record := range []string{"[familiar] FAMILIAR-ONE", "REPLACE-ONE", "ASYNC-TWO", "[whisper] hello-whisper", "AGENT-ONE"} {
 		if strings.Count(activeComplete, record) != 1 {
 			t.Fatalf("terminal record %q count=%d\n%s", record, strings.Count(activeHistory, record), activeHistory)
@@ -411,7 +923,6 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	if strings.Count(activeComplete, "GAME-ONE") != 2 {
 		t.Fatalf("duplicate game record not retained twice\n%s", activeHistory)
 	}
-	assertNativeHistory(t, activeHistory)
 	if !strings.Contains(activeComplete, "GAME-ONE\nGAME-ONE\n\n[familiar] FAMILIAR-ONE") {
 		t.Fatalf("empty append did not create a visually blank terminal line\n%s", activeHistory)
 	}
@@ -420,7 +931,7 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	}
 	assertOrderedOnce(t, postQuitComplete, sequence)
 	assertUnicodeRecord(t, captureCompleteJoined())
-	assertNativeHistory(t, postQuitHistory)
+	assertNoAdditionalNativeChrome(t, activeHistory, postQuitHistory)
 	postQuitCursor, err := tmux("display-message", "-p", "-t", session, "#{cursor_flag}:#{cursor_x}:#{cursor_y}")
 	if err != nil {
 		t.Fatalf("read post-quit cursor state: %v\n%s", err, postQuitCursor)
@@ -428,6 +939,76 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	if !strings.HasPrefix(string(postQuitCursor), "1:") {
 		t.Fatalf("post-quit cursor was not restored: %q", postQuitCursor)
 	}
+}
+
+func TestNativeDashboardInputClearedUsesBottommostFrame(t *testing.T) {
+	const width = 30
+	frame := func(value string) string {
+		input := "│ Command > " + value
+		return input + strings.Repeat(" ", width-ansi.StringWidth(input)-1) + "│\n╰" + strings.Repeat("─", width-2) + "╯"
+	}
+	staleCleared := frame("")
+	currentDraft := frame("post-repaint")
+	if nativeDashboardInputCleared(staleCleared+"\n"+currentDraft, "post-repaint", width) {
+		t.Fatal("stale cleared input masked occupied current input")
+	}
+	partialCurrent := "│ Command > " + strings.Repeat(" ", width-len("│ Command > ")-1) + "│\n╰────"
+	if nativeDashboardInputCleared(staleCleared+"\n"+partialCurrent, "post-repaint", width) {
+		t.Fatal("stale cleared input masked partial current frame")
+	}
+	currentCleared := frame("")
+	if !nativeDashboardInputCleared(currentDraft+"\n"+currentCleared, "post-repaint", width) {
+		t.Fatal("cleared current input was not ready")
+	}
+}
+
+func nativeDashboardInputCleared(pane, submitted string, width int) bool {
+	lines := nativeNonblankRows(pane)
+	if len(lines) < 2 {
+		return false
+	}
+	input, bottom := lines[len(lines)-2], lines[len(lines)-1]
+	return strings.Contains(input, "│ Command >") &&
+		!strings.Contains(input, submitted) &&
+		ansi.StringWidth(input) == width &&
+		strings.HasPrefix(bottom, "╰") &&
+		strings.HasSuffix(bottom, "╯") &&
+		ansi.StringWidth(bottom) == width
+}
+
+func nativeCompleteDashboardBounds(pane string, width int) (int, int) {
+	var tops, bottoms int
+	for _, line := range strings.Split(pane, "\n") {
+		if ansi.StringWidth(line) != width {
+			continue
+		}
+		if strings.HasPrefix(line, "╭─ [Test Hall]") && strings.HasSuffix(line, "╮") {
+			tops++
+		}
+		if strings.HasPrefix(line, "╰") && strings.HasSuffix(line, "╯") {
+			bottoms++
+		}
+	}
+	return tops, bottoms
+}
+
+func nativeDashboardBottomComplete(pane string, width int) bool {
+	lines := nativeNonblankRows(pane)
+	if len(lines) == 0 {
+		return false
+	}
+	bottom := lines[len(lines)-1]
+	return strings.HasPrefix(bottom, "╰") && strings.HasSuffix(bottom, "╯") && ansi.StringWidth(bottom) == width
+}
+
+func nativeNonblankRows(pane string) []string {
+	var lines []string
+	for _, line := range strings.Split(pane, "\n") {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func nativeTerminalMultilineRecord() string {
@@ -438,7 +1019,36 @@ func nativeTerminalMultilineRecord() string {
 	return strings.Join(lines, "\n")
 }
 
-func nativeTerminalSequence() []string {
+func nativeTerminalExactWidthRecord(width int) string {
+	prefix := fmt.Sprintf("EXACT-WIDTH-%03d-", width)
+	return prefix + strings.Repeat("x", width-len(prefix))
+}
+
+func nativeTerminalPostResizeRecord() string {
+	prefix := "POST-RESIZE-"
+	return prefix + strings.Repeat("x", 44-len(prefix)) + "Ω"
+}
+
+func assertInitialNativeTranscript(t *testing.T, text string) {
+	t.Helper()
+	assertOrderedOnce(t, text, nativeTerminalInitialSequence())
+	assertUnicodeRecord(t, text)
+	if !containsNativeBlankAppend(text) {
+		t.Fatalf("empty append did not create a visually blank terminal line\n%s", text)
+	}
+}
+
+func containsNativeBlankAppend(text string) bool {
+	lines := strings.Split(text, "\n")
+	for index := 0; index+3 < len(lines); index++ {
+		if lines[index] == "GAME-ONE" && lines[index+1] == "GAME-ONE" && strings.TrimSpace(lines[index+2]) == "" && lines[index+3] == "[familiar] FAMILIAR-ONE" {
+			return true
+		}
+	}
+	return false
+}
+
+func nativeTerminalInitialSequence() []string {
 	sequence := []string{"GAME-ONE", "GAME-ONE", "[familiar] FAMILIAR-ONE", "REPLACE-ONE"}
 	for number := 0; number < 36; number++ {
 		sequence = append(sequence, fmt.Sprintf("TALL-%02d", number))
@@ -447,21 +1057,30 @@ func nativeTerminalSequence() []string {
 	for number := 0; number < 36; number++ {
 		sequence = append(sequence, fmt.Sprintf("MULTILINE-%02d", number))
 	}
-	sequence = append(sequence, "[system 01:02:03] SYSTEM-ONE", "[whisper] hello-whisper", "[agent] AGENT-ONE", "> async", "ASYNC-TWO", "> tail")
+	return append(sequence, "[system 01:02:03] SYSTEM-ONE")
+}
+
+func lineCount(text string) int {
+	return strings.Count(text, "\n")
+}
+
+func nativeTerminalSequence() []string {
+	sequence := nativeTerminalInitialSequence()
+	sequence = append(sequence, "[whisper] hello-whisper", "[agent] AGENT-ONE", "> async", "ASYNC-TWO", "> tail")
 	for number := 0; number < 36; number++ {
 		sequence = append(sequence, fmt.Sprintf("TAIL-%02d", number))
 	}
 	sequence = append(sequence, "> boundary-seed")
 	sequence = append(sequence, nativeTerminalBoundarySeeds()...)
 	sequence = append(sequence, "> boundary-advance")
-	for number := 0; number < 14; number++ {
+	for number := 0; number < 11; number++ {
 		sequence = append(sequence, fmt.Sprintf("BOUNDARY-ADVANCE-%02d", number))
 	}
 	sequence = append(sequence, "> flush")
 	for number := 0; number < 36; number++ {
 		sequence = append(sequence, fmt.Sprintf("FLUSH-%02d", number))
 	}
-	return append(sequence, "[system 01:02:03] disconnected")
+	return sequence
 }
 
 func nativeTerminalBoundarySeeds() []string {
@@ -491,11 +1110,24 @@ func assertCaptureBoundaryRace(t *testing.T, before, history, pane, after string
 
 func assertNativeHistory(t *testing.T, history string) {
 	t.Helper()
-	for _, value := range []string{"CLEAR-ME", "[Test Hall]", "L: shield", "R: sword", "o---@", "READY |", "DISCONNECTED", "Help", "Theme", "map navigation"} {
+	for _, value := range nativeChromeValues() {
 		if strings.Contains(history, value) {
 			t.Fatalf("immutable history contains dashboard, map, or modal value %q\n%s", value, history)
 		}
 	}
+}
+
+func assertNoAdditionalNativeChrome(t *testing.T, before, after string) {
+	t.Helper()
+	for _, value := range nativeChromeValues() {
+		if strings.Count(after, value) > strings.Count(before, value) {
+			t.Fatalf("stable terminal operation added dashboard, map, or modal value %q to history\nbefore:\n%s\nafter:\n%s", value, before, after)
+		}
+	}
+}
+
+func nativeChromeValues() []string {
+	return []string{"CLEAR-ME", "[Test Hall]", "L: shield", "R: sword", "o---@", "READY |", "DISCONNECTED", "Help", "Theme", "Map navigation", "Command", "Whisper", "default", "dark", "high-contrast", "proof-chrome"}
 }
 
 func assertUnicodeRecord(t *testing.T, text string) {

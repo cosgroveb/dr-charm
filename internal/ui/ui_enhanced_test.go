@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"dr-charm/internal/presentation"
 	"dr-charm/internal/telemetry"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type fakeSession struct {
@@ -127,6 +128,49 @@ func TestEnhancedModelResizeDoesNotClearTranscript(t *testing.T) {
 	model = updated.(EnhancedModel)
 	if command != nil || !model.dimensionsReceived || model.width != 44 || model.height != 20 {
 		t.Fatalf("resize command=%v dimensionsReceived=%v dimensions=%dx%d", command, model.dimensionsReceived, model.width, model.height)
+	}
+}
+
+func TestEnhancedModelSynchronizesInputPresentationWithoutChangingDraft(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	initialGeometry := calculateDashboardGeometry(model.width, model.height, false, model.themes.current(), model.input.Prompt)
+	if model.input.Prompt != "Command > " || model.input.Width() != initialGeometry.inputWidth {
+		t.Fatalf("initial input prompt=%q width=%d geometry=%+v", model.input.Prompt, model.input.Width(), initialGeometry)
+	}
+	model.agent.client = nativeTerminalAgent{}
+	model.input.SetValue("say 你好")
+	model.input.SetCursor(3)
+
+	updated, _ := model.Update(presentation.Update{Connection: presentation.Ready, Prompt: strings.Repeat("very-long-prompt", 8) + ">"})
+	model = updated.(EnhancedModel)
+	if !strings.HasPrefix(model.input.Prompt, "Command ") || model.input.Value() != "say 你好" || model.input.Position() != 3 {
+		t.Fatalf("prompt update changed input prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
+	model = updated.(EnhancedModel)
+	if model.input.Prompt != "Whisper > " || model.input.Value() != "say 你好" || model.input.Position() != 3 {
+		t.Fatalf("agent toggle changed input prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
+	}
+	model.themes.add(theme{Name: "wide-padding", Padding: 2})
+	model.viewMode = ViewModeTheme
+	model = model.handleThemeKeys(tea.KeyPressMsg{Code: 'G'})
+	if model.input.Value() != "say 你好" || model.input.Position() != 3 {
+		t.Fatalf("theme change changed input value=%q cursor=%d", model.input.Value(), model.input.Position())
+	}
+	updated, _ = model.Update(tea.WindowSizeMsg{Width: 10, Height: 24})
+	model = updated.(EnhancedModel)
+	if model.input.Width() < 1 || ansi.StringWidth(model.input.Prompt)+model.input.Width()+1 > 10 || model.input.Value() != "say 你好" || model.input.Position() != 3 {
+		t.Fatalf("narrow input prompt=%q width=%d value=%q cursor=%d", model.input.Prompt, model.input.Width(), model.input.Value(), model.input.Position())
+	}
+	for _, row := range strings.Split(model.View().Content, "\n") {
+		if got := ansi.StringWidth(row); got > 10 {
+			t.Fatalf("narrow input wrapped at width %d: %q", got, row)
+		}
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
+	model = updated.(EnhancedModel)
+	if !strings.HasPrefix(model.input.Prompt, "Command") || model.input.Value() != "say 你好" || model.input.Position() != 3 {
+		t.Fatalf("command restore prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
 	}
 }
 
@@ -293,7 +337,7 @@ func TestEnhancedModelPlacesHandsBesideVisibleMap(t *testing.T) {
 	model.width, model.height = 60, 22
 	model.applySessionUpdate(presentation.Update{Connection: presentation.Ready, Location: presentation.Location{Title: "[Town]"}, Hands: presentation.Hands{Left: "shield", Right: "sword"}, Map: presentation.Map{Lines: []string{"o---@", "    |", "    o", "    |", "    o"}, CurrentToken: "1", CurrentLine: 0, CurrentColumn: 4}})
 	for _, row := range strings.Split(model.View().Content, "\n") {
-		if contains(row, "L: shield") && contains(row, "|") {
+		if contains(row, "L: shield") && contains(row, "│") {
 			return
 		}
 	}
@@ -310,6 +354,70 @@ func TestEnhancedModelModalsKeepDashboardHeight(t *testing.T) {
 		if got := lipgloss.Height(model.View().Content); got != want {
 			t.Errorf("mode %v height = %d, want dashboard height %d", mode, got, want)
 		}
+	}
+}
+
+func TestEnhancedModelModesPreviewThemeAndPreserveInteractiveState(t *testing.T) {
+	useANSI256(t)
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.width, model.height = 100, 30
+	model.mapOutput = []string{"@", "|", "o", "|", "o", "|", "o", "|"}
+	model.mapPanLine, model.mapPanColumn = 4, 7
+	model.mapNavigation = true
+	model.input.SetValue("draft command")
+	model.input.SetCursor(5)
+	model.syncInputPresentation()
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyF1})
+	model = updated.(EnhancedModel)
+	if !strings.Contains(model.View().Content, "Help") {
+		t.Fatalf("help frame missing: %q", model.View().Content)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF3})
+	model = updated.(EnhancedModel)
+	before := model.View().Content
+	updated, _ = model.Update(keyDown())
+	model = updated.(EnhancedModel)
+	after := model.View().Content
+	if strings.Contains(before, "38;5;237") || !strings.Contains(after, "38;5;237") || !strings.Contains(after, "> dark") {
+		t.Fatalf("theme did not preview before close\nbefore=%q\nafter=%q", before, after)
+	}
+	updated, _ = model.Update(tea.WindowSizeMsg{Width: 60, Height: 22})
+	model = updated.(EnhancedModel)
+	if model.input.Value() != "draft command" || model.input.Position() != 5 || model.mapPanLine != 4 || model.mapPanColumn != 7 || !model.mapNavigation {
+		t.Fatalf("mode state changed: input=%q cursor=%d pan=%d,%d navigation=%v", model.input.Value(), model.input.Position(), model.mapPanLine, model.mapPanColumn, model.mapNavigation)
+	}
+	for _, size := range [][2]int{{100, 30}, {100, 19}, {60, 15}, {5, 24}} {
+		model.width, model.height = size[0], size[1]
+		model.syncInputPresentation()
+		dashboardRows := lipgloss.Height(renderDashboard(model.width, model.height, model.snapshot, model.buildStatusBar(), model.buildInput(), model.mapOutput, model.mapPanLine, model.mapPanColumn, model.mapNavigation, model.themes.current()))
+		if got := lipgloss.Height(model.renderThemeSelector()); got != dashboardRows {
+			t.Fatalf("size %dx%d modal rows=%d dashboard rows=%d", size[0], size[1], got, dashboardRows)
+		}
+	}
+}
+
+func TestEnhancedModelHelpShiftGMovesToBottom(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.viewMode = ViewModeHelp
+	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModShift}))
+	model = updated.(EnhancedModel)
+	if model.modalOffset != 1<<30 {
+		t.Fatalf("Shift-G help offset=%d, want bottom sentinel", model.modalOffset)
+	}
+}
+
+func TestEnhancedModelMapShiftGMovesToBottomAndPreservesDraft(t *testing.T) {
+	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
+	model.mapOutput = []string{"@", "|", "o", "|", "o"}
+	model.mapNavigation = true
+	model.input.SetValue("draft command")
+	model.input.SetCursor(5)
+
+	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModShift}))
+	model = updated.(EnhancedModel)
+	if model.mapPanLine != len(model.mapOutput)-1 || model.input.Value() != "draft command" || model.input.Position() != 5 {
+		t.Fatalf("Shift-G map pan=%d draft=%q cursor=%d", model.mapPanLine, model.input.Value(), model.input.Position())
 	}
 }
 

@@ -35,6 +35,7 @@ type cursedRenderer struct {
 	starting      bool // indicates whether the renderer is starting after being stopped
 	pendingErase  bool // an scr.Erase() is pending and hasn't been drained by flush yet
 	noInput       bool // whether input is disabled, in which case keyboard enhancement queries are pointless
+	printedRows   int  // physical rows occupied by the most recently inserted output
 }
 
 var _ renderer = &cursedRenderer{}
@@ -673,6 +674,11 @@ func (s *cursedRenderer) setColorProfile(p colorprofile.Profile) {
 // resize implements renderer.
 func (s *cursedRenderer) resize(w, h int) {
 	s.mu.Lock()
+	// A main-screen reflow can move the hardware cursor horizontally while
+	// the renderer still has its cached X position. Reanchor the first redraw.
+	if !s.view.AltScreen {
+		_, _ = s.scr.WriteString("\r")
+	}
 	// We need to mark the screen for clear to force a redraw. However, we
 	// only do so if we're using alt screen or the width has changed.
 	// That's because redrawing is expensive and we can avoid it if the
@@ -770,8 +776,9 @@ func (s *cursedRenderer) insertAbove(str string) error {
 	}
 
 	var sb strings.Builder
-	w, h := s.cellbuf.Width(), s.cellbuf.Height()
+	w, h := s.width, s.cellbuf.Height()
 	_, y := s.scr.Position()
+	printedRows := s.printedRows
 
 	lines := strings.Split(str, "\n")
 	for _, line := range lines {
@@ -788,18 +795,23 @@ func (s *cursedRenderer) insertAbove(str string) error {
 		offset := 1
 		lineWidth := ansi.StringWidth(line)
 		if w > 0 && lineWidth > w {
-			offset += lineWidth / w
+			offset = 1 + (lineWidth-1)/w
 		}
 
-		// Scroll the screen up by the line's physical height, then restore the
-		// cursor to the frame top, make that many rows, and fill them. This
-		// leaves the hardware cursor at the frame origin for the next line.
-		sb.WriteString(strings.Repeat("\n", offset))
-		sb.WriteString(ansi.CursorUp(offset + h - 1))
+		// Promote every row of the previous output before inserting this line.
+		// Using the incoming line's height leaves wrapped continuation rows in
+		// the frame, where the next dashboard repaint overwrites them.
+		scrollRows := printedRows
+		if scrollRows == 0 {
+			scrollRows = offset
+		}
+		sb.WriteString(strings.Repeat("\n", scrollRows))
+		sb.WriteString(ansi.CursorUp(scrollRows + h - 1))
 		sb.WriteString(ansi.InsertLine(offset))
 		sb.WriteString(line)
 		sb.WriteString(ansi.EraseLineRight)
 		sb.WriteString("\r\n")
+		printedRows = offset
 		y = 0
 	}
 
@@ -813,6 +825,7 @@ func (s *cursedRenderer) insertAbove(str string) error {
 	if err != nil {
 		return fmt.Errorf("bubbletea: error writing insert above to the writer: %w", err)
 	}
+	s.printedRows = printedRows
 
 	return nil
 }

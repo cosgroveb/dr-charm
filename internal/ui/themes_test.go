@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"dr-charm/internal/presentation"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestThemeCatalogBuiltins(t *testing.T) {
@@ -20,7 +21,7 @@ func TestThemeCatalogBuiltins(t *testing.T) {
 		t.Fatalf("names = %#v, want %#v", got, wantNames)
 	}
 	for index, want := range []theme{
-		{Name: "default", Foreground: "7", Border: "62", TitleBar: "170", StatusBar: "240", StatusBarBg: "235", BorderType: "rounded", Padding: 1},
+		{Name: "default", Foreground: "7", Border: "62", TitleBar: "170", StatusBar: "252", StatusBarBg: "235", BorderType: "rounded", Padding: 1},
 		{Name: "dark", Foreground: "252", Border: "237", TitleBar: "33", StatusBar: "252", StatusBarBg: "237", BorderType: "rounded", Padding: 1},
 		{Name: "high-contrast", Foreground: "15", Border: "15", TitleBar: "226", StatusBar: "0", StatusBarBg: "15", BorderType: "thick", Padding: 1},
 	} {
@@ -72,6 +73,40 @@ func TestThemeCatalogLoadsFlatCustomTheme(t *testing.T) {
 	want := theme{Name: "flat", Foreground: "101", Border: "102", TitleBar: "103", StatusBar: "104", StatusBarBg: "105", BorderType: "double", Padding: 2}
 	if got := catalog.current(); got != want {
 		t.Fatalf("custom theme = %#v, want %#v", got, want)
+	}
+}
+
+func TestThemePresentationDefaultsDoNotMutateLoadedTheme(t *testing.T) {
+	loaded := theme{Name: "sparse", Padding: 99, BorderType: "unknown"}
+	resolved := loaded.presentation()
+	if loaded != (theme{Name: "sparse", Padding: 99, BorderType: "unknown"}) {
+		t.Fatalf("loaded theme mutated: %#v", loaded)
+	}
+	if resolved.Foreground != "7" || resolved.Border != "7" || resolved.TitleBar != "7" || resolved.StatusBar != "7" || resolved.StatusBarBg != "" || resolved.Padding != 2 || resolved.BorderType != "rounded" {
+		t.Fatalf("resolved theme = %#v", resolved)
+	}
+}
+
+func TestBuiltinThemesRenderStatusAndInputPairs(t *testing.T) {
+	useANSI256(t)
+	catalog := newThemeCatalog("")
+	for index, want := range []struct {
+		sequence string
+	}{
+		{sequence: "38;5;252;48;5;235"},
+		{sequence: "38;5;252;48;5;237"},
+		{sequence: "30;107"},
+	} {
+		if index > 0 {
+			catalog.next()
+		}
+		view := renderDashboard(60, 30, presentation.Update{}, "READY", "Command > ", []string{"@"}, 0, 0, false, catalog.current())
+		rows := strings.Split(view, "\n")
+		for _, row := range rows[len(rows)-3 : len(rows)-1] {
+			if !strings.Contains(row, want.sequence) {
+				t.Fatalf("theme %q strip pair missing: %q", catalog.current().Name, row)
+			}
+		}
 	}
 }
 
@@ -137,6 +172,24 @@ func TestThemeSelectorUsesCatalogOrderAndNavigation(t *testing.T) {
 	}
 	if view := model.renderThemeSelector(); !strings.Contains(view, "> dark") {
 		t.Fatalf("selected marker missing from %q", view)
+	}
+}
+
+func TestCompactThemeSelectorKeepsTitleAndSelectedMarker(t *testing.T) {
+	model := EnhancedModel{themes: newThemeCatalog(""), width: 60, height: 15, mapOutput: []string{"@"}}
+	model.themes.currentIndex = len(model.themes.themes) - 1
+	view := ansi.Strip(model.renderThemeSelector())
+	if !strings.Contains(view, "Theme") || !strings.Contains(view, "> high-contrast") {
+		t.Fatalf("compact selector omitted title or selection: %q", view)
+	}
+}
+
+func TestThemeSelectorShiftGSelectsLastTheme(t *testing.T) {
+	model := EnhancedModel{themes: newThemeCatalog(""), width: 80, height: 24}
+	model.themes.currentIndex = 1
+	model = model.handleThemeKeys(tea.KeyPressMsg(tea.Key{Code: 'g', Mod: tea.ModShift}))
+	if got, want := model.themes.current().Name, "high-contrast"; got != want {
+		t.Fatalf("Shift-G selected %q, want %q", got, want)
 	}
 }
 
