@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -160,6 +161,8 @@ func TestNativeTerminalHostResizeReflow(t *testing.T) {
 	server := fmt.Sprintf("dr-charm-native-reflow-%d", os.Getpid())
 	session := "host-reflow"
 	helperPIDFile := filepath.Join(t.TempDir(), "helper.pid")
+	// The top always enters history at width 10; tmux may keep lower frame rows visible.
+	const reflowedNarrowTop = "╭─ [Test H"
 	tmux := func(args ...string) ([]byte, error) {
 		return exec.Command("tmux", append([]string{"-L", server}, args...)...).CombinedOutput()
 	}
@@ -251,7 +254,7 @@ func TestNativeTerminalHostResizeReflow(t *testing.T) {
 	}
 	waitForStopped(panePID)
 	reflow10History := capture("-S", "-1000", "-E", "-1")
-	if lineCount(reflow10History) <= lineCount(reflow44History) || !strings.Contains(reflow10History, "│ Command") {
+	if lineCount(reflow10History) <= lineCount(reflow44History) || !slices.Contains(strings.Split(reflow10History, "\n"), reflowedNarrowTop) {
 		t.Fatalf("10-column host reflow did not expand retained dashboard fragments\n44 columns:\n%s\n10 columns:\n%s", reflow44History, reflow10History)
 	}
 	if output, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "30"); err != nil {
@@ -316,7 +319,7 @@ func TestNativeTerminalHostResizeReflow(t *testing.T) {
 	}
 	waitForStopped(panePID)
 	direct10History := capture("-S", "-1000", "-E", "-1")
-	if lineCount(direct10History) <= lineCount(directBeforeHistory) || !strings.Contains(direct10History, "│ Command") {
+	if lineCount(direct10History) <= lineCount(directBeforeHistory) || !slices.Contains(strings.Split(direct10History, "\n"), reflowedNarrowTop) {
 		t.Fatalf("direct 100-to-10 host reflow did not retain expanded dashboard fragments\nbefore:\n%s\nafter:\n%s", directBeforeHistory, direct10History)
 	}
 	if err := syscall.Kill(panePID, syscall.SIGCONT); err != nil {
