@@ -537,15 +537,22 @@ func TestNativeTerminalHostResizeReflow(t *testing.T) {
 			time.Sleep(25 * time.Millisecond)
 		}
 	}
-	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "initial dashboard")
-	deadline := time.Now().Add(10 * time.Second)
-	for !strings.Contains(capture("-J", "-S", "-1000"), "[system 01:02:03] SYSTEM-ONE") {
-		if time.Now().After(deadline) {
-			t.Fatalf("host-reflow initial transcript did not finish\n%s", capture("-J", "-S", "-1000"))
+	waitInitialTranscript := func(description string) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			complete := capture("-J", "-S", "-1000")
+			if strings.Contains(complete, "[system 01:02:03] SYSTEM-ONE") {
+				return complete
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("host-reflow %s did not finish\n%s", description, complete)
+			}
+			time.Sleep(25 * time.Millisecond)
 		}
-		time.Sleep(25 * time.Millisecond)
 	}
-	beforeComplete := capture("-J", "-S", "-1000")
+	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "initial dashboard")
+	beforeComplete := waitInitialTranscript("initial transcript")
 	beforeHistory := capture("-S", "-1000", "-E", "-1")
 	assertInitialNativeTranscript(t, beforeComplete)
 	assertNativeHistory(t, beforeHistory)
@@ -620,9 +627,10 @@ func TestNativeTerminalHostResizeReflow(t *testing.T) {
 		t.Fatalf("start direct-narrow helper: %v\n%s", err, output)
 	}
 	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "direct-narrow initial dashboard")
+	directComplete := waitInitialTranscript("direct-narrow initial transcript")
 	directBeforeHistory := capture("-S", "-1000", "-E", "-1")
 	assertNativeHistory(t, directBeforeHistory)
-	assertInitialNativeTranscript(t, capture("-J", "-S", "-1000"))
+	assertInitialNativeTranscript(t, directComplete)
 	panePID = readHelperPID(directPIDFile)
 	if err := syscall.Kill(panePID, syscall.SIGSTOP); err != nil {
 		t.Fatalf("stop direct-narrow helper: %v", err)
