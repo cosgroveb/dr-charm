@@ -134,21 +134,28 @@ func TestEnhancedModelResizeDoesNotClearTranscript(t *testing.T) {
 func TestEnhancedModelSynchronizesInputPresentationWithoutChangingDraft(t *testing.T) {
 	model := newTestModel(t, &fakeSession{updates: make(chan presentation.Update)})
 	initialGeometry := calculateDashboardGeometry(model.width, model.height, false, model.themes.current(), model.input.Prompt)
-	if model.input.Prompt != "Command > " || model.input.Width() != initialGeometry.inputWidth {
+	if model.input.Prompt != "Command > " || model.input.Width() != initialGeometry.inputWidth || !model.input.Focused() {
 		t.Fatalf("initial input prompt=%q width=%d geometry=%+v", model.input.Prompt, model.input.Width(), initialGeometry)
 	}
 	model.agent.client = nativeTerminalAgent{}
 	model.input.SetValue("say 你好")
 	model.input.SetCursor(3)
+	model.width, model.height = 168, 24
+	model.mapOutput = []string{"@"}
+	model.syncInputPresentation()
+	mapGeometry := calculateDashboardGeometry(model.width, model.height, true, model.themes.current(), model.input.Prompt)
+	if mapGeometry.inputInterior != 82 || model.input.Width() != mapGeometry.inputWidth || ansi.StringWidth(model.input.Prompt)+model.input.Width()+1 > mapGeometry.inputInterior || !model.input.Focused() {
+		t.Fatalf("mapped input prompt=%q width=%d geometry=%+v", model.input.Prompt, model.input.Width(), mapGeometry)
+	}
 
 	updated, _ := model.Update(presentation.Update{Connection: presentation.Ready, Prompt: strings.Repeat("very-long-prompt", 8) + ">"})
 	model = updated.(EnhancedModel)
-	if !strings.HasPrefix(model.input.Prompt, "Command ") || model.input.Value() != "say 你好" || model.input.Position() != 3 {
+	if !strings.HasPrefix(model.input.Prompt, "Command ") || model.input.Value() != "say 你好" || model.input.Position() != 3 || !model.input.Focused() {
 		t.Fatalf("prompt update changed input prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
 	}
 	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyF6})
 	model = updated.(EnhancedModel)
-	if model.input.Prompt != "Whisper > " || model.input.Value() != "say 你好" || model.input.Position() != 3 {
+	if model.input.Prompt != "Whisper > " || model.input.Value() != "say 你好" || model.input.Position() != 3 || !model.input.Focused() {
 		t.Fatalf("agent toggle changed input prompt=%q value=%q cursor=%d", model.input.Prompt, model.input.Value(), model.input.Position())
 	}
 	model.themes.add(theme{Name: "wide-padding", Padding: 2})

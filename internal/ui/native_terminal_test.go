@@ -28,6 +28,10 @@ func TestNativeTerminalHelper(t *testing.T) {
 	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") != "1" {
 		return
 	}
+	if os.Getenv("DR_CHARM_NATIVE_MIXED_HEIGHT") == "1" {
+		runNativeMixedHeightHelper(t)
+		return
+	}
 	if path := os.Getenv("DR_CHARM_NATIVE_PID_FILE"); path != "" {
 		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 			t.Fatal(err)
@@ -123,6 +127,216 @@ func TestNativeTerminalHelper(t *testing.T) {
 	program := tea.NewProgram(model, tea.WithColorProfile(colorprofile.ANSI256))
 	if _, err := program.Run(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func runNativeMixedHeightHelper(t *testing.T) {
+	updates := make(chan presentation.Update, 1)
+	base := presentation.Update{
+		Connection: presentation.Ready,
+		Prompt:     ">",
+		Location:   presentation.Location{Title: "[Mixed Hall]", Exits: []string{"north"}},
+		Hands:      presentation.Hands{Left: "shield", Right: "sword", PreparedSpell: "Fire"},
+		Status:     []presentation.StatusField{{Label: "H", Value: "100%"}},
+		Map:        presentation.Map{Lines: []string{"o---@", "    |", "    o", "    |", "    o"}},
+	}
+	updates <- base
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		records := nativeMixedHeightRecords()
+		if os.Getenv("DR_CHARM_NATIVE_TAB") == "1" {
+			records = nativeTabRecords()
+		}
+		for number, record := range records {
+			update := base
+			update.Location.Title = fmt.Sprintf("[Mixed Hall %02d]", number)
+			update.Status = []presentation.StatusField{{Label: "Burst", Value: strconv.Itoa(number)}}
+			update.Map.Lines = []string{fmt.Sprintf("%02d--@", number), "    |", "    o", "    |", "    o"}
+			update.Entries = []presentation.Entry{{Pane: presentation.Game, Text: record, Operation: presentation.Append}}
+			updates <- update
+			time.Sleep(3 * time.Millisecond)
+		}
+	}()
+	session := &nativeTerminalSession{updates: updates, send: func(string) {}}
+	model := InitialEnhancedModel(session, Options{Context: context.Background()})
+	model.agent.client = nativeTerminalAgent{}
+	if _, err := tea.NewProgram(model).Run(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeTerminalTabInsertion(t *testing.T) {
+	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") == "1" {
+		return
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Fatalf("tmux is required for terminal-state proof: %v", err)
+	}
+	helper := filepath.Join(t.TempDir(), "native-ui.test")
+	if output, err := exec.Command("go", "test", "-c", "-o", helper).CombinedOutput(); err != nil {
+		t.Fatalf("prebuild tab helper: %v\n%s", err, output)
+	}
+	server := fmt.Sprintf("dr-charm-native-tab-%d", os.Getpid())
+	session := "tab"
+	tmux := func(args ...string) ([]byte, error) {
+		return exec.Command("tmux", append([]string{"-L", server}, args...)...).CombinedOutput()
+	}
+	t.Cleanup(func() { _, _ = tmux("kill-server") })
+	command := fmt.Sprintf("DR_CHARM_NATIVE_TERMINAL_HELPER=1 DR_CHARM_NATIVE_MIXED_HEIGHT=1 DR_CHARM_NATIVE_TAB=1 %s -test.run '^TestNativeTerminalHelper$' -test.count=1", shellQuote(helper))
+	if output, err := tmux("new-session", "-d", "-x", "20", "-y", "15", "-s", session, command); err != nil {
+		t.Fatalf("start tab helper: %v\n%s", err, output)
+	}
+	capture := func(arguments ...string) string {
+		t.Helper()
+		output, err := tmux(append([]string{"capture-pane", "-p", "-t", session}, arguments...)...)
+		if err != nil {
+			t.Fatalf("capture tab terminal: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(capture("-J", "-S", "-1000"), "TAB-AFTER") {
+		if time.Now().After(deadline) {
+			t.Fatalf("tab stream did not finish\n%s", capture("-S", "-1000"))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	complete := capture("-J", "-S", "-1000")
+	assertOrderedOnce(t, complete, []string{
+		"TAB-CONTROL 1234567ABCDEFGHIJKLM CONTROL-TAIL",
+		"TAB-ONE 1234567\tABCDEFGHIJKLM TAB-TAIL",
+		"TAB-MULTIPLE 1\t2\t3 MULTIPLE-TAIL",
+		"TAB-WIDE 1234567\t界界界界界界 WIDE-TAIL",
+		strings.Repeat("m", 17) + "\t",
+		strings.Repeat("n", 17) + "\tA",
+		strings.Repeat("p", 20),
+		strings.Repeat("q", 20) + "A",
+		strings.Repeat("a", 19) + "界" + strings.Repeat("b", 19),
+		"TAB-AFTER",
+	})
+	pane := capture()
+	lastTitle := fmt.Sprintf("[Mixed Hall %02d]", len(nativeTabRecords())-1)
+	if !strings.Contains(pane, "Command >") || !strings.Contains(pane, lastTitle) {
+		t.Fatalf("tab insertion corrupted compact frame\n%s", pane)
+	}
+	assertNativeHistory(t, capture("-S", "-1000", "-E", "-1"))
+}
+
+func TestNativeTerminalMixedHeightInsertion(t *testing.T) {
+	if os.Getenv("DR_CHARM_NATIVE_TERMINAL_HELPER") == "1" {
+		return
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Fatalf("tmux is required for terminal-state proof: %v", err)
+	}
+	helper := filepath.Join(t.TempDir(), "native-ui.test")
+	if output, err := exec.Command("go", "test", "-c", "-o", helper).CombinedOutput(); err != nil {
+		t.Fatalf("prebuild mixed-height helper: %v\n%s", err, output)
+	}
+	server := fmt.Sprintf("dr-charm-native-mixed-%d", os.Getpid())
+	session := "mixed-height"
+	tmux := func(args ...string) ([]byte, error) {
+		return exec.Command("tmux", append([]string{"-L", server}, args...)...).CombinedOutput()
+	}
+	t.Cleanup(func() { _, _ = tmux("kill-server") })
+	command := fmt.Sprintf("DR_CHARM_NATIVE_TERMINAL_HELPER=1 DR_CHARM_NATIVE_MIXED_HEIGHT=1 %s -test.run '^TestNativeTerminalHelper$' -test.count=1", shellQuote(helper))
+	if output, err := tmux("new-session", "-d", "-x", "168", "-y", "24", "-s", session, command); err != nil {
+		t.Fatalf("start mixed-height helper: %v\n%s", err, output)
+	}
+	capture := func(arguments ...string) string {
+		t.Helper()
+		output, err := tmux(append([]string{"capture-pane", "-p", "-t", session}, arguments...)...)
+		if err != nil {
+			t.Fatalf("capture mixed-height terminal: %v\n%s", err, output)
+		}
+		return string(output)
+	}
+	last := "MIXED-AFTER"
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(capture("-J", "-S", "-1000"), last) {
+		if time.Now().After(deadline) {
+			t.Fatalf("mixed-height stream did not finish\n%s", capture("-S", "-1000"))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if output, err := tmux("send-keys", "-t", session, "F6", "draft-proof"); err != nil {
+		t.Fatalf("switch mixed-height helper to Whisper: %v\n%s", err, output)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	var pane string
+	for {
+		pane = capture()
+		if strings.Contains(pane, "Whisper > draft-proof") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Whisper input did not render after mixed-height stream\n%s", pane)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	complete := capture("-J", "-S", "-1000")
+	assertOrderedOnce(t, complete, nativeMixedHeightRecords())
+	if strings.Count(pane, "Whisper >") != 1 || strings.Contains(pane, "Command >") {
+		t.Fatalf("input mode labels corrupted after mixed-height stream\n%s", pane)
+	}
+	if !strings.Contains(pane, "READY | LOG off | AGENT idle | Burst:42") {
+		t.Fatalf("final status missing after mixed-height stream\n%s", pane)
+	}
+	rows := strings.Split(strings.TrimSuffix(pane, "\n"), "\n")
+	if len(rows) < 11 {
+		t.Fatalf("visible terminal rows=%d, want at least 11 dashboard rows\n%s", len(rows), pane)
+	}
+	rows = rows[len(rows)-11:]
+	if top, bottom := nativeCompleteDashboardBounds(pane, 168); top != 0 || bottom != 1 {
+		// The changing title intentionally differs from nativeCompleteDashboardBounds' Test Hall fixture.
+		if bottom != 1 || !strings.HasPrefix(rows[0], "╭─ [Mixed Hall 42]") ||
+			!strings.HasSuffix(rows[0], "╮") || ansi.StringWidth(rows[0]) != 168 {
+			t.Fatalf("mixed-height dashboard bounds top=%d bottom=%d\n%s", top, bottom, pane)
+		}
+	}
+	assertNativeHistory(t, capture("-S", "-1000", "-E", "-1"))
+	if output, err := tmux("resize-window", "-t", session, "-x", "100", "-y", "24"); err != nil {
+		t.Fatalf("narrow mixed-height helper after oversized output: %v\n%s", err, output)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if resized := capture("-J", "-S", "-1000"); strings.Count(resized, nativeMixedHeightRecords()[41]) != 1 {
+		t.Fatalf("resized terminal changed oversized logical record\n%s", resized)
+	}
+	if output, err := tmux("resize-window", "-t", session, "-x", "168", "-y", "24"); err != nil {
+		t.Fatalf("restore mixed-height helper width: %v\n%s", err, output)
+	}
+}
+
+func nativeMixedHeightRecords() []string {
+	records := make([]string, 0, 43)
+	for number := 0; number < 40; number++ {
+		if number%2 == 0 {
+			records = append(records, fmt.Sprintf("MIXED-%02d short", number))
+			continue
+		}
+		records = append(records, fmt.Sprintf("MIXED-%02d %s TAIL-%02d", number, strings.Repeat("long ", 38), number))
+	}
+	oversized := "MIXED-OVERSIZED " + strings.Repeat("oversized ", 240) + "OVERSIZED-TAIL"
+	records = append(records,
+		"MIXED-MULTILINE-SHORT\nMIXED-MULTILINE-LONG "+strings.Repeat("wide ", 40)+"MULTILINE-TAIL",
+		"MIXED-STREAM-PRE\n"+oversized+"\n\n"+oversized+"-SECOND\nMIXED-STREAM-POST",
+		"MIXED-AFTER",
+	)
+	return records
+}
+
+func nativeTabRecords() []string {
+	return []string{
+		"TAB-CONTROL 1234567ABCDEFGHIJKLM CONTROL-TAIL",
+		"TAB-ONE 1234567\tABCDEFGHIJKLM TAB-TAIL",
+		"TAB-MULTIPLE 1\t2\t3 MULTIPLE-TAIL",
+		"TAB-WIDE 1234567\t界界界界界界 WIDE-TAIL",
+		strings.Repeat("m", 17) + "\t",
+		strings.Repeat("n", 17) + "\tA",
+		strings.Repeat("p", 20) + "\t",
+		strings.Repeat("q", 20) + "\tA",
+		strings.Repeat("a", 19) + "界" + strings.Repeat("b", 19),
+		"TAB-AFTER",
 	}
 }
 
@@ -230,6 +444,13 @@ func TestNativeTerminalHostResizeReflow(t *testing.T) {
 		}
 	}
 	waitVisible(func(visible string) bool { return strings.Contains(visible, "Command >") }, "initial dashboard")
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(capture("-J", "-S", "-1000"), "[system 01:02:03] SYSTEM-ONE") {
+		if time.Now().After(deadline) {
+			t.Fatalf("host-reflow initial transcript did not finish\n%s", capture("-J", "-S", "-1000"))
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	beforeComplete := capture("-J", "-S", "-1000")
 	beforeHistory := capture("-S", "-1000", "-E", "-1")
 	assertInitialNativeTranscript(t, beforeComplete)
@@ -406,7 +627,7 @@ func TestNativeTerminalFixedGeometry(t *testing.T) {
 		{name: "full", width: "100", height: "30", input: "Command >", contains: []string{"╭", "38;5;62", "38;5;170", "38;5;252", "48;5;235"}},
 		{name: "compact-map", width: "100", height: "19", input: "Command >", artifact: "100x19-compact-map", contains: []string{"o---@", "38;5;252", "48;5;235"}, absent: []string{"╭"}},
 		{name: "short", width: "60", height: "15", input: "Command >", artifact: "60x15-short", contains: []string{"38;5;252", "48;5;235"}, absent: []string{"╭", "o---@"}, exactWidth: true},
-		{name: "narrow", width: "10", height: "24", input: "Command…", artifact: "10x24-narrow", contains: []string{"o---@", "38;5;252", "48;5;235"}, absent: []string{"╭"}},
+		{name: "narrow", width: "10", height: "24", input: "Command…", artifact: "10x24-narrow", contains: []string{"38;5;252", "48;5;235"}, absent: []string{"╭", "o---@"}},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -442,6 +663,9 @@ func TestNativeTerminalFixedGeometry(t *testing.T) {
 					time.Sleep(25 * time.Millisecond)
 				}
 			}
+			waitCapture([]string{"-J", "-S", "-1000"}, func(captured string) bool {
+				return strings.Contains(captured, "[system 01:02:03] SYSTEM-ONE")
+			}, "complete initial transcript")
 			ansiCapture := waitCapture([]string{"-e"}, func(captured string) bool {
 				if !strings.Contains(captured, test.input) {
 					return false
@@ -589,6 +813,25 @@ func TestNativeTerminalScrollback(t *testing.T) {
 			}
 			if time.Now().After(deadline) {
 				t.Fatalf("visible terminal never emitted %q\n%s", records, capture)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	waitForVisibleWidth := func(record string, width int) string {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			capture, err := tmux("capture-pane", "-p", "-t", session)
+			if err != nil {
+				t.Fatalf("poll width-bounded terminal: %v\n%s", err, capture)
+			}
+			for _, line := range strings.Split(string(capture), "\n") {
+				if strings.Contains(line, record) && ansi.StringWidth(line) == width {
+					return string(capture)
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("visible terminal never rendered %q at width %d\n%s", record, width, capture)
 			}
 			time.Sleep(25 * time.Millisecond)
 		}
@@ -814,18 +1057,28 @@ func TestNativeTerminalScrollback(t *testing.T) {
 	if out, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "30"); err != nil {
 		t.Fatalf("width-only resize: %v\n%s", err, out)
 	}
+	waitForVisibleWithout("Command >", "o---@")
+	assertCheckpoint("width-only resize", "Command >", "o---@", false)
+	if out, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "18"); err != nil {
+		t.Fatalf("below-map resize: %v\n%s", err, out)
+	}
+	send("F1")
+	waitForVisibleWidth("Help", 44)
+	send("Escape")
+	waitForVisibleWithout("Command >", "Help")
+	waitForVisibleWithout("L: shield", "o---@")
+	assertCheckpoint("below-map resize", "L: shield", "o---@", false)
 	send("post-resize", "Enter")
 	postResizePrefix := strings.TrimSuffix(nativeTerminalPostResizeRecord(), "Ω")
 	waitFor(postResizePrefix)
 	waitForClearedDashboardInput("post-resize", 44)
 	sequence = append(sequence, "> post-resize", postResizePrefix, "Ω")
-	waitForVisible("o---@")
-	assertCheckpoint("width-only resize", "o---@", "", false)
-	if out, err := tmux("resize-window", "-t", session, "-x", "44", "-y", "18"); err != nil {
-		t.Fatalf("below-map resize: %v\n%s", err, out)
+	assertCheckpoint("post-resize output at 44x18", "Command >", "o---@", false)
+	if complete := captureCompleteJoined(); strings.Count(complete, nativeTerminalPostResizeRecord()) != 1 {
+		t.Fatalf("44x18 terminal did not contain the complete post-resize record exactly once\n%s", complete)
+	} else if !strings.Contains(complete, nativeTerminalPostResizeRecord()+"\n") {
+		t.Fatalf("44x18 terminal joined the post-resize record to following frame content\n%s", complete)
 	}
-	waitForVisibleWithout("L: shield", "o---@")
-	assertCheckpoint("below-map resize", "L: shield", "o---@", false)
 	if out, err := tmux("resize-window", "-t", session, "-x", "100", "-y", "19"); err != nil {
 		t.Fatalf("at-map resize: %v\n%s", err, out)
 	}
@@ -844,6 +1097,9 @@ func TestNativeTerminalScrollback(t *testing.T) {
 			t.Fatalf("rapid resize %s×%s: %v\n%s", size[0], size[1], err, out)
 		}
 	}
+	send("F1")
+	waitForVisibleWidth("Help", 100)
+	send("Escape")
 	widePane := waitForVisibleAll("o---@", "L: shield", "R: sword", "READY |")
 	assertCheckpoint("rapid resize", "o---@", "", false)
 	if !strings.Contains(widePane, "L: shield") || !strings.Contains(widePane, "R: sword") || !strings.Contains(widePane, "READY |") {
@@ -963,20 +1219,37 @@ func TestNativeDashboardInputClearedUsesBottommostFrame(t *testing.T) {
 	if !nativeDashboardInputCleared(currentDraft+"\n"+currentCleared, "post-repaint", width) {
 		t.Fatal("cleared current input was not ready")
 	}
+	sharedBody := "│ Command >       │L: shield│o---@│\n" +
+		"│                 │R: sword │  |  │\n" +
+		"╰────────────────────────────╯"
+	if !nativeDashboardInputCleared(sharedBody, "post-repaint", width) {
+		t.Fatal("cleared shared-body input was not ready")
+	}
 }
 
 func nativeDashboardInputCleared(pane, submitted string, width int) bool {
 	lines := nativeNonblankRows(pane)
-	if len(lines) < 2 {
+	if len(lines) == 0 {
 		return false
 	}
-	input, bottom := lines[len(lines)-2], lines[len(lines)-1]
-	return strings.Contains(input, "│ Command >") &&
-		!strings.Contains(input, submitted) &&
-		ansi.StringWidth(input) == width &&
-		strings.HasPrefix(bottom, "╰") &&
-		strings.HasSuffix(bottom, "╯") &&
-		ansi.StringWidth(bottom) == width
+	last := lines[len(lines)-1]
+	if strings.Contains(last, "Command >") && !strings.Contains(last, submitted) && ansi.StringWidth(last) <= width {
+		return true
+	}
+	if !strings.HasPrefix(last, "╰") || !strings.HasSuffix(last, "╯") || ansi.StringWidth(last) != width {
+		return false
+	}
+	for index := len(lines) - 2; index >= 0; index-- {
+		line := lines[index]
+		if strings.HasPrefix(line, "╰") && strings.HasSuffix(line, "╯") {
+			break
+		}
+		if strings.Contains(line, "│ Command >") && !strings.Contains(line, submitted) &&
+			strings.HasPrefix(line, "│") && strings.HasSuffix(line, "│") {
+			return true
+		}
+	}
+	return false
 }
 
 func nativeCompleteDashboardBounds(pane string, width int) (int, int) {
@@ -1106,8 +1379,8 @@ func assertCaptureBoundaryRace(t *testing.T, before, history, pane, after string
 			missing = append(missing, seed)
 		}
 	}
-	if len(missing) != 3 {
-		t.Fatalf("split captures omitted %d boundary records, want 3: %v\nhistory:\n%s\npane:\n%s", len(missing), missing, history, pane)
+	if len(missing) != 1 {
+		t.Fatalf("split captures omitted %d boundary records, want 1: %v\nhistory:\n%s\npane:\n%s", len(missing), missing, history, pane)
 	}
 }
 

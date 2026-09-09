@@ -102,7 +102,7 @@ func TestBuiltinThemesRenderStatusAndInputPairs(t *testing.T) {
 		}
 		view := renderDashboard(60, 30, presentation.Update{}, "READY", "Command > ", []string{"@"}, 0, 0, false, catalog.current())
 		rows := strings.Split(view, "\n")
-		for _, row := range rows[len(rows)-3 : len(rows)-1] {
+		for _, row := range []string{rows[1], rows[2]} {
 			if !strings.Contains(row, want.sequence) {
 				t.Fatalf("theme %q strip pair missing: %q", catalog.current().Name, row)
 			}

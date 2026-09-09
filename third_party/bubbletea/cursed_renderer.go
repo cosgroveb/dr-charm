@@ -34,8 +34,8 @@ type cursedRenderer struct {
 	syncdUpdates  bool // whether to use synchronized output mode for updates
 	starting      bool // indicates whether the renderer is starting after being stopped
 	pendingErase  bool // an scr.Erase() is pending and hasn't been drained by flush yet
+	resizeErased  bool // the old inline frame was erased by exact row count before a resize redraw
 	noInput       bool // whether input is disabled, in which case keyboard enhancement queries are pointless
-	printedRows   int  // physical rows occupied by the most recently inserted output
 }
 
 var _ renderer = &cursedRenderer{}
@@ -325,10 +325,14 @@ func (s *cursedRenderer) flush(closing bool) error {
 
 	// We're no longer starting.
 	s.starting = false
+	resizeErased := s.resizeErased
 	s.pendingErase = false
+	s.resizeErased = false
 
 	if frameArea != s.cellbuf.Bounds() {
-		s.scr.Erase() // Force a full redraw to avoid artifacts.
+		if !resizeErased {
+			s.scr.Erase() // Force a full redraw to avoid artifacts.
+		}
 
 		// We need to reset the touched lines buffer to match the new height.
 		s.cellbuf.Touched = nil
@@ -533,7 +537,6 @@ func (s *cursedRenderer) flush(closing bool) error {
 	if !view.AltScreen && view.Cursor == nil {
 		s.scr.MoveTo(0, 0)
 	}
-
 	if err := s.scr.Flush(); err != nil {
 		return fmt.Errorf("bubbletea: error flushing screen writer: %w", err)
 	}
@@ -674,22 +677,71 @@ func (s *cursedRenderer) setColorProfile(p colorprofile.Profile) {
 // resize implements renderer.
 func (s *cursedRenderer) resize(w, h int) {
 	s.mu.Lock()
-	// A main-screen reflow can move the hardware cursor horizontally while
-	// the renderer still has its cached X position. Reanchor the first redraw.
-	if !s.view.AltScreen {
-		_, _ = s.scr.WriteString("\r")
+	if s.width == w && s.height == h {
+		s.mu.Unlock()
+		return
 	}
-	// We need to mark the screen for clear to force a redraw. However, we
-	// only do so if we're using alt screen or the width has changed.
-	// That's because redrawing is expensive and we can avoid it if the
-	// width hasn't changed in inline mode. On the other hand, when using
-	// alt screen mode, we always want to redraw because some terminals
-	// would scroll the screen and our content would be lost.
-	s.scr.Erase()
+	if s.lastView != nil && (s.lastView.AltScreen || s.lastView.Cursor != nil) {
+		s.scr.Erase()
+		s.width, s.height = w, h
+		s.scr.Resize(s.width, s.height)
+		s.pendingErase = true
+		s.mu.Unlock()
+		return
+	}
+	var flushedContent string
+	if s.lastView != nil {
+		flushedContent = s.lastView.Content
+	}
+	oldFrameRows := resizedFrameRows(flushedContent, w, h)
 	s.width, s.height = w, h
-	s.scr.Resize(s.width, s.height)
+	reset(s)
+	if oldFrameRows > 0 {
+		var erase strings.Builder
+		writeBoundedFrameErase(&erase, oldFrameRows)
+		s.buf.WriteString(erase.String())
+		s.scr.SetPosition(0, 0)
+		s.resizeErased = true
+	}
+	// Empty inline frames have no owned rows to erase, so retain the existing
+	// full-redraw path. Non-empty hidden-cursor frames were erased above.
+	if !s.resizeErased {
+		s.scr.Erase()
+	}
 	s.pendingErase = true
 	s.mu.Unlock()
+}
+
+func resizedFrameRows(content string, width, terminalHeight int) int {
+	if content == "" || width <= 0 || terminalHeight <= 0 {
+		return 0
+	}
+	rows := 0
+	for _, line := range strings.Split(content, "\n") {
+		lineRows := 1
+		if lineWidth := terminalLineWidth(line, width); lineWidth > width {
+			lineRows = 1 + (lineWidth-1)/width
+		}
+		rows += lineRows
+		if rows >= terminalHeight {
+			return terminalHeight
+		}
+	}
+	return rows
+}
+
+func writeBoundedFrameErase(sb *strings.Builder, rows int) {
+	if rows <= 0 {
+		return
+	}
+	sb.WriteString(ansi.SaveCursor)
+	for row := 0; row < rows; row++ {
+		sb.WriteString(ansi.EraseEntireLine)
+		if row+1 < rows {
+			sb.WriteString(ansi.CursorDown(1))
+		}
+	}
+	sb.WriteString(ansi.RestoreCursor)
 }
 
 // clearScreen implements renderer.
@@ -778,9 +830,30 @@ func (s *cursedRenderer) insertAbove(str string) error {
 	var sb strings.Builder
 	w, h := s.width, s.cellbuf.Height()
 	_, y := s.scr.Position()
-	printedRows := s.printedRows
-
 	lines := strings.Split(str, "\n")
+	if shouldStreamAbove(lines, w, s.height, h) {
+		writeFrameErase(&sb, h, y)
+		for _, line := range lines {
+			sb.WriteString(line)
+			sb.WriteString("\r\n")
+		}
+		if h > 1 {
+			sb.WriteString(strings.Repeat("\n", h-1))
+			sb.WriteString(ansi.CursorUp(h - 1))
+		}
+		sb.WriteByte('\r')
+
+		if s.logger != nil {
+			s.logger.Printf("stream above: %q", sb.String())
+		}
+		if _, err := io.WriteString(s.w, sb.String()); err != nil {
+			return fmt.Errorf("bubbletea: error writing insert above to the writer: %w", err)
+		}
+		s.scr.SetPosition(0, 0)
+		s.scr.Erase()
+		s.pendingErase = true
+		return nil
+	}
 	for _, line := range lines {
 		// Insert one logical line at a time. A terminal can insert only as
 		// many physical rows as remain in the frame; inserting a record taller
@@ -793,25 +866,19 @@ func (s *cursedRenderer) insertAbove(str string) error {
 		}
 
 		offset := 1
-		lineWidth := ansi.StringWidth(line)
+		lineWidth := terminalLineWidth(line, w)
 		if w > 0 && lineWidth > w {
 			offset = 1 + (lineWidth-1)/w
 		}
 
-		// Promote every row of the previous output before inserting this line.
-		// Using the incoming line's height leaves wrapped continuation rows in
-		// the frame, where the next dashboard repaint overwrites them.
-		scrollRows := printedRows
-		if scrollRows == 0 {
-			scrollRows = offset
-		}
-		sb.WriteString(strings.Repeat("\n", scrollRows))
-		sb.WriteString(ansi.CursorUp(scrollRows + h - 1))
+		// Scroll and insert the same number of physical rows for this line so
+		// the frame origin stays fixed when consecutive lines wrap differently.
+		sb.WriteString(strings.Repeat("\n", offset))
+		sb.WriteString(ansi.CursorUp(offset + h - 1))
 		sb.WriteString(ansi.InsertLine(offset))
 		sb.WriteString(line)
 		sb.WriteString(ansi.EraseLineRight)
 		sb.WriteString("\r\n")
-		printedRows = offset
 		y = 0
 	}
 
@@ -825,9 +892,77 @@ func (s *cursedRenderer) insertAbove(str string) error {
 	if err != nil {
 		return fmt.Errorf("bubbletea: error writing insert above to the writer: %w", err)
 	}
-	s.printedRows = printedRows
-
 	return nil
+}
+
+func shouldStreamAbove(lines []string, width, terminalHeight, frameHeight int) bool {
+	if width <= 0 || frameHeight <= 0 || frameHeight > terminalHeight {
+		return false
+	}
+	capacity := terminalHeight - frameHeight
+	for _, line := range lines {
+		rows := 1
+		if lineWidth := terminalLineWidth(line, width); lineWidth > width {
+			rows = 1 + (lineWidth-1)/width
+		}
+		if rows > capacity {
+			return true
+		}
+	}
+	return false
+}
+
+func writeFrameErase(sb *strings.Builder, height, relativeY int) {
+	sb.WriteByte('\r')
+	if relativeY > 0 {
+		sb.WriteString(ansi.CursorUp(relativeY))
+	}
+	for row := 0; row < height; row++ {
+		sb.WriteString(ansi.EraseEntireLine)
+		if row+1 < height {
+			sb.WriteString(ansi.CursorDown(1))
+		}
+	}
+	if height > 1 {
+		sb.WriteString(ansi.CursorUp(height - 1))
+	}
+	sb.WriteByte('\r')
+}
+
+func terminalLineWidth(line string, terminalWidth int) int {
+	line = ansi.Strip(line)
+	if terminalWidth <= 0 {
+		return ansi.StringWidth(line)
+	}
+	width := 0
+	for len(line) > 0 {
+		if line[0] == '\t' {
+			line = line[1:]
+			if width > 0 && width%terminalWidth == 0 {
+				// A TAB at the delayed-wrap position stays at the right margin.
+				continue
+			}
+			column := width % terminalWidth
+			nextStop := column + 8 - column%8
+			if nextStop >= terminalWidth {
+				nextStop = terminalWidth - 1
+			}
+			width += nextStop - column
+			continue
+		}
+
+		cluster, clusterWidth := ansi.FirstGraphemeCluster(line, ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		column := width % terminalWidth
+		if column > 0 && column+clusterWidth > terminalWidth {
+			width += terminalWidth - column
+		}
+		width += clusterWidth
+		line = line[len(cluster):]
+	}
+	return width
 }
 
 // onMouse implements renderer.

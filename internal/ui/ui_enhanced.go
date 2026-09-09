@@ -532,9 +532,9 @@ func (m EnhancedModel) modalRows() int {
 func (m EnhancedModel) modalBodyRows() int {
 	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, m.themes.current(), m.input.Prompt)
 	if geometry.chrome {
-		return max(1, geometry.rows-4)
+		return max(0, geometry.rows-4)
 	}
-	return max(1, geometry.rows-1)
+	return max(0, geometry.rows-1)
 }
 
 func (m EnhancedModel) renderModal(title string, lines []string, offset int) string {
@@ -584,7 +584,7 @@ func (m *EnhancedModel) syncInputPresentation() {
 		label = "Command " + prompt + " "
 	}
 	geometry := calculateDashboardGeometry(m.width, m.height, len(m.mapOutput) > 0, resolved, label)
-	label = truncate(label, max(0, geometry.contentWidth-2))
+	label = truncate(label, max(0, geometry.inputInterior-2))
 	m.input.Prompt = label
 	m.input.SetWidth(geometry.inputWidth)
 

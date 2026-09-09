@@ -11,63 +11,80 @@ import (
 const transcriptRows = 12
 
 type dashboardGeometry struct {
-	width, rows                    int
-	innerWidth, contentWidth       int
-	mapWidth, equipmentWidth       int
-	mapHeight, padding, inputWidth int
-	mapVisible, chrome             bool
+	width, rows                   int
+	innerWidth, contentWidth      int
+	inputInterior, equipmentWidth int
+	mapWidth, bodyHeight, padding int
+	inputWidth                    int
+	mapVisible, chrome            bool
 }
 
 func calculateDashboardGeometry(width, height int, mapAvailable bool, currentTheme theme, inputLabel string) dashboardGeometry {
 	width = max(0, width)
 	available := max(1, height-transcriptRows)
 	resolved := currentTheme.presentation()
-	geometry := dashboardGeometry{width: width, padding: resolved.Padding}
+	geometry := dashboardGeometry{width: width, padding: max(0, resolved.Padding)}
 
-	compactMapHeight := min(8, available-2)
-	geometry.mapVisible = mapAvailable && compactMapHeight >= 5 && compactMapHeight+2 <= available
-	if geometry.mapVisible {
-		geometry.mapHeight = compactMapHeight
-		geometry.rows = compactMapHeight + 2
-	} else {
-		geometry.rows = min(4, available)
+	if mapAvailable && available >= 8 {
+		for geometry.padding > 0 && !setMapColumns(&geometry, width-4-(2*geometry.padding)) {
+			geometry.padding--
+		}
+		if setMapColumns(&geometry, width-4-(2*geometry.padding)) {
+			geometry.chrome = true
+			geometry.mapVisible = true
+			geometry.bodyHeight = min(8, available-3)
+			geometry.rows = geometry.bodyHeight + 3
+			geometry.innerWidth = max(0, width-2)
+			geometry.contentWidth = max(0, geometry.innerWidth-(2*geometry.padding))
+			geometry.inputWidth = inputFieldWidth(geometry.inputInterior, inputLabel)
+			return geometry
+		}
+	}
+	if mapAvailable && available >= 7 && setMapColumns(&geometry, width-2) {
+		geometry.padding = 0
+		geometry.mapVisible = true
+		geometry.bodyHeight = min(8, available-2)
+		geometry.rows = geometry.bodyHeight + 2
+		geometry.innerWidth = width
+		geometry.contentWidth = geometry.inputInterior
+		geometry.inputWidth = inputFieldWidth(geometry.inputInterior, inputLabel)
+		return geometry
 	}
 
+	geometry.padding = max(0, resolved.Padding)
 	for geometry.padding > 0 && width-2-(2*geometry.padding) < 12 {
 		geometry.padding--
 	}
 	geometry.innerWidth = max(0, width-2)
 	geometry.contentWidth = max(0, geometry.innerWidth-(2*geometry.padding))
-	geometry.chrome = geometry.contentWidth >= 12
-	if geometry.mapVisible {
-		geometry.chrome = geometry.chrome && available >= 10
-		if geometry.chrome {
-			geometry.mapHeight = min(8, available-5)
-			geometry.rows = geometry.mapHeight + 5
-		}
+	geometry.chrome = available >= 6 && geometry.contentWidth >= 12
+	if geometry.chrome {
+		geometry.rows = 6
+		geometry.inputInterior = geometry.contentWidth
 	} else {
-		geometry.chrome = geometry.chrome && available >= 6
-		if geometry.chrome {
-			geometry.rows = 6
-		}
-	}
-
-	if geometry.mapVisible {
-		usable := geometry.contentWidth
-		if geometry.chrome {
-			usable = max(0, usable-1)
-		}
-		geometry.mapWidth = max(0, usable*2/3)
-		geometry.equipmentWidth = max(0, usable-geometry.mapWidth)
-	}
-	geometry.inputWidth = max(1, geometry.contentWidth-ansi.StringWidth(inputLabel)-1)
-	if !geometry.chrome {
+		geometry.rows = min(4, available)
 		geometry.innerWidth = width
 		geometry.contentWidth = width
+		geometry.inputInterior = width
 		geometry.padding = 0
-		geometry.inputWidth = max(1, width-ansi.StringWidth(inputLabel)-1)
 	}
+	geometry.inputWidth = inputFieldWidth(geometry.inputInterior, inputLabel)
 	return geometry
+}
+
+func setMapColumns(geometry *dashboardGeometry, usable int) bool {
+	if usable < 48 {
+		return false
+	}
+	geometry.equipmentWidth = usable / 4
+	geometry.mapWidth = usable / 4
+	geometry.inputInterior = usable - geometry.equipmentWidth - geometry.mapWidth
+	return geometry.inputInterior >= 24 && geometry.equipmentWidth >= 12 && geometry.mapWidth >= 12
+}
+
+func inputFieldWidth(interior int, label string) int {
+	label = truncate(label, max(0, interior-2))
+	return max(1, interior-ansi.StringWidth(label)-1)
 }
 
 func renderDashboard(width, height int, update presentation.Update, status, input string, mapLines []string, panLine, panColumn int, navigating bool, currentTheme theme) string {
@@ -88,25 +105,25 @@ func dashboardRows(width, height int, update presentation.Update, status, input 
 
 func compactDashboardRows(geometry dashboardGeometry, update presentation.Update, location, hands, status, input string, mapLines []string, panLine, panColumn int, navigating bool, currentTheme theme) []string {
 	if geometry.mapVisible {
-		mapWidth := mapWidth(geometry.width)
-		mapRows := cropMap(mapLines, panLine, panColumn, geometry.mapHeight, mapWidth)
-		rows := compactMapRows(geometry.width, mapRows, mapSideRows(update, location, navigating, geometry.width), geometry.mapHeight, currentTheme.Foreground)
-		return append(rows,
+		if navigating {
+			status = "Map navigation | " + status
+		}
+		rows := []string{
+			paint(location, geometry.width, currentTheme.Foreground, ""),
 			paint(status, geometry.width, currentTheme.StatusBar, currentTheme.StatusBarBg),
-			paint(input, geometry.width, currentTheme.StatusBar, currentTheme.StatusBarBg),
-		)
+		}
+		cropped := cropMap(mapLines, panLine, panColumn, geometry.bodyHeight, geometry.mapWidth)
+		return append(rows, compactMapBodyRows(geometry, input, equipmentRows(update), cropped, currentTheme)...)
 	}
-	metadata := []string{location, hands, status}
 	rows := make([]string, 0, geometry.rows)
-	for index, row := range metadata {
-		if len(rows)+1 >= geometry.rows {
-			break
-		}
-		if index == len(metadata)-1 {
-			rows = append(rows, paint(row, geometry.width, currentTheme.StatusBar, currentTheme.StatusBarBg))
-		} else {
-			rows = append(rows, paint(row, geometry.width, currentTheme.Foreground, ""))
-		}
+	if geometry.rows >= 3 {
+		rows = append(rows, paint(location, geometry.width, currentTheme.Foreground, ""))
+	}
+	if geometry.rows >= 4 {
+		rows = append(rows, paint(hands, geometry.width, currentTheme.Foreground, ""))
+	}
+	if geometry.rows >= 2 {
+		rows = append(rows, paint(status, geometry.width, currentTheme.StatusBar, currentTheme.StatusBarBg))
 	}
 	return append(rows, paint(input, geometry.width, currentTheme.StatusBar, currentTheme.StatusBarBg))
 }
@@ -115,10 +132,14 @@ func framedDashboardRows(geometry dashboardGeometry, update presentation.Update,
 	border := dashboardBorder(currentTheme.BorderType)
 	rows := make([]string, 0, geometry.rows)
 	if geometry.mapVisible {
-		rows = append(rows, splitTopRule(border, geometry, location, navigating, currentTheme))
-		cropped := cropMap(mapLines, panLine, panColumn, geometry.mapHeight, geometry.mapWidth)
+		rows = append(rows, mapRule(border.TopLeft, border.Top, border.MiddleTop, border.TopRight, geometry, location, navigating, currentTheme))
+		if navigating {
+			status = "Map navigation | " + status
+		}
+		rows = append(rows, framedStripRow(border, geometry, status, currentTheme))
+		cropped := cropMap(mapLines, panLine, panColumn, geometry.bodyHeight, geometry.mapWidth)
 		equipment := equipmentRows(update)
-		for index := 0; index < geometry.mapHeight; index++ {
+		for index := 0; index < geometry.bodyHeight; index++ {
 			mapLine := ""
 			if index < len(cropped) {
 				mapLine = cropped[index]
@@ -127,25 +148,30 @@ func framedDashboardRows(geometry dashboardGeometry, update presentation.Update,
 			if index < len(equipment) {
 				equipmentLine = equipment[index]
 			}
-			leftColor := currentTheme.Border
-			dividerColor := currentTheme.Border
+			inputLine := ""
+			if index == 0 {
+				inputLine = input
+			}
+			mapBorderColor := currentTheme.Border
 			if navigating {
-				leftColor = currentTheme.TitleBar
-				dividerColor = currentTheme.TitleBar
+				mapBorderColor = currentTheme.TitleBar
+			}
+			inputForeground, inputBackground := currentTheme.Foreground, ""
+			if index == 0 {
+				inputForeground, inputBackground = currentTheme.StatusBar, currentTheme.StatusBarBg
 			}
 			rows = append(rows,
-				paint(border.Left, 1, leftColor, "")+
-					paint(strings.Repeat(" ", geometry.padding)+mapLine, geometry.padding+geometry.mapWidth, currentTheme.Foreground, "")+
-					paint(border.Left, 1, dividerColor, "")+
-					paint(truncate(equipmentLine, geometry.equipmentWidth)+strings.Repeat(" ", geometry.padding), geometry.equipmentWidth+geometry.padding, currentTheme.Foreground, "")+
-					paint(border.Right, 1, currentTheme.Border, ""),
+				paint(border.Left, 1, currentTheme.Border, "")+
+					paint(strings.Repeat(" ", geometry.padding)+inputLine, geometry.padding+geometry.inputInterior, inputForeground, inputBackground)+
+					paint(border.Left, 1, currentTheme.Border, "")+
+					paint(equipmentLine, geometry.equipmentWidth, currentTheme.Foreground, "")+
+					paint(border.Left, 1, mapBorderColor, "")+
+					paint(mapLine+strings.Repeat(" ", geometry.padding), geometry.mapWidth+geometry.padding, currentTheme.Foreground, "")+
+					paint(border.Right, 1, mapBorderColor, ""),
 			)
 		}
-		dividerTitle := ""
-		if navigating {
-			dividerTitle = "Map navigation"
-		}
-		rows = append(rows, splitRule(border, geometry, dividerTitle, currentTheme))
+		rows = append(rows, mapRule(border.BottomLeft, border.Bottom, border.MiddleBottom, border.BottomRight, geometry, "", navigating, currentTheme))
+		return rows
 	} else {
 		rows = append(rows, titledRule(border.TopLeft, border.Top, border.TopRight, geometry.width, location, currentTheme.Border, currentTheme.TitleBar))
 		rows = append(rows, framedContentRow(border, geometry, handsText(update), currentTheme))
@@ -174,7 +200,7 @@ func renderModal(width, height int, mapAvailable bool, title string, lines []str
 		return strings.Join(rows, "\n")
 	}
 	border := dashboardBorder(resolved.BorderType)
-	bodyRows := geometry.rows - 4
+	bodyRows := max(0, geometry.rows-4)
 	offset = min(max(offset, 0), max(0, len(lines)-bodyRows))
 	visible := lines[offset:min(len(lines), offset+bodyRows)]
 	rows := make([]string, 0, geometry.rows)
@@ -192,18 +218,18 @@ func renderModal(width, height int, mapAvailable bool, title string, lines []str
 	return strings.Join(rows, "\n")
 }
 
-func splitTopRule(border lipgloss.Border, geometry dashboardGeometry, title string, navigating bool, currentTheme theme) string {
-	leftWidth := geometry.padding + geometry.mapWidth
-	rightWidth := geometry.equipmentWidth + geometry.padding
-	leftColor := currentTheme.Border
+func mapRule(left, fill, divider, right string, geometry dashboardGeometry, title string, navigating bool, currentTheme theme) string {
+	mapColor := currentTheme.Border
 	if navigating {
-		leftColor = currentTheme.TitleBar
+		mapColor = currentTheme.TitleBar
 	}
-	return paint(border.TopLeft, 1, leftColor, "") +
-		ruleSegment(border.Top, leftWidth, title, leftColor, currentTheme.TitleBar) +
-		paint(border.MiddleTop, 1, leftColor, "") +
-		ruleSegment(border.Top, rightWidth, "", currentTheme.Border, currentTheme.TitleBar) +
-		paint(border.TopRight, 1, currentTheme.Border, "")
+	return paint(left, 1, currentTheme.Border, "") +
+		ruleSegment(fill, geometry.padding+geometry.inputInterior, title, currentTheme.Border, currentTheme.TitleBar) +
+		paint(divider, 1, currentTheme.Border, "") +
+		ruleSegment(fill, geometry.equipmentWidth, "", currentTheme.Border, currentTheme.TitleBar) +
+		paint(divider, 1, mapColor, "") +
+		ruleSegment(fill, geometry.mapWidth+geometry.padding, "", mapColor, currentTheme.TitleBar) +
+		paint(right, 1, mapColor, "")
 }
 
 func framedContentRow(border lipgloss.Border, geometry dashboardGeometry, value string, currentTheme theme) string {
@@ -220,20 +246,6 @@ func framedStripRow(border lipgloss.Border, geometry dashboardGeometry, value st
 	return paint(border.Left, 1, currentTheme.Border, "") +
 		paint(inner, geometry.innerWidth, currentTheme.StatusBar, currentTheme.StatusBarBg) +
 		paint(border.Right, 1, currentTheme.Border, "")
-}
-
-func splitRule(border lipgloss.Border, geometry dashboardGeometry, title string, currentTheme theme) string {
-	leftWidth := geometry.padding + geometry.mapWidth
-	rightWidth := geometry.equipmentWidth + geometry.padding
-	leftColor := currentTheme.Border
-	if title != "" {
-		leftColor = currentTheme.TitleBar
-	}
-	return paint(border.MiddleLeft, 1, leftColor, "") +
-		ruleSegment(border.Top, leftWidth, title, leftColor, currentTheme.TitleBar) +
-		paint(border.MiddleBottom, 1, leftColor, "") +
-		ruleSegment(border.Top, rightWidth, "", currentTheme.Border, currentTheme.TitleBar) +
-		paint(border.MiddleRight, 1, currentTheme.Border, "")
 }
 
 func titledRule(left, fill, right string, width int, title, ruleColor, titleColor string) string {
@@ -308,43 +320,32 @@ func equipmentRows(update presentation.Update) []string {
 	return rows
 }
 
-func mapSideRows(update presentation.Update, location string, navigating bool, width int) []string {
-	if navigating {
-		location += "  Map navigation"
-	}
-	left := "L: " + emptyHand(update.Hands.Left)
-	if update.Hands.PreparedSpell != "" {
-		left += "  Sp: " + update.Hands.PreparedSpell
-	}
-	right := "R: " + emptyHand(update.Hands.Right)
-	return []string{truncate(location, width), truncate(left, width), truncate(right, width)}
-}
-
-func compactMapRows(width int, lines, side []string, height int, foreground string) []string {
-	mapWidth := mapWidth(width)
-	sideWidth := max(0, width-mapWidth-2)
-	rows := make([]string, height)
+func compactMapBodyRows(geometry dashboardGeometry, input string, equipment, lines []string, currentTheme theme) []string {
+	rows := make([]string, geometry.bodyHeight)
 	for index := range rows {
-		line := ""
+		inputLine := ""
+		if index == 0 {
+			inputLine = input
+		}
+		equipmentLine := ""
+		if index < len(equipment) {
+			equipmentLine = equipment[index]
+		}
+		mapLine := ""
 		if index < len(lines) {
-			line = lines[index]
+			mapLine = lines[index]
 		}
-		line = truncate(line, mapWidth)
-		if index >= len(side) || sideWidth == 0 {
-			rows[index] = paint(line, width, foreground, "")
-			continue
+		inputForeground, inputBackground := currentTheme.Foreground, ""
+		if index == 0 {
+			inputForeground, inputBackground = currentTheme.StatusBar, currentTheme.StatusBarBg
 		}
-		row := line + strings.Repeat(" ", max(0, mapWidth-ansi.StringWidth(line))) + "  " + truncate(side[index], sideWidth)
-		rows[index] = paint(row, width, foreground, "")
+		rows[index] = paint(inputLine, geometry.inputInterior, inputForeground, inputBackground) +
+			paint(" ", 1, currentTheme.Foreground, "") +
+			paint(equipmentLine, geometry.equipmentWidth, currentTheme.Foreground, "") +
+			paint(" ", 1, currentTheme.Foreground, "") +
+			paint(mapLine, geometry.mapWidth, currentTheme.Foreground, "")
 	}
 	return rows
-}
-
-func mapWidth(width int) int {
-	if width <= 2 {
-		return width
-	}
-	return max(1, width*2/3)
 }
 
 func emptyHand(value string) string {
