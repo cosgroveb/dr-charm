@@ -67,6 +67,7 @@ func TestXMLTagDisposition(t *testing.T) {
 		{name: "right", input: "<right>item</right>", want: []protocolEvent{{kind: eventHand, name: "right", value: "item", aux: "\x00"}}},
 		{name: "roundtime", input: "<roundTime value='1'/>", want: []protocolEvent{{kind: eventRoundTime, timestamp: time.Unix(1, 0)}}},
 		{name: "settingsinfo", input: "<settingsInfo/>", want: []protocolEvent{{kind: eventSettingsInfo}}},
+		{name: "skin", input: "<skin id='health'/>", want: nil},
 		{name: "spell", input: "<spell>Fire Ball</spell>", want: []protocolEvent{{kind: eventSpell, value: "Fire Ball"}}},
 		{name: "spelltime", input: "<spellTime value='1'/>", want: []protocolEvent{{kind: eventSpellTime, timestamp: time.Unix(1, 0)}}},
 		{name: "streamwindow", input: "<streamWindow id='main'/>", want: []protocolEvent{{kind: eventDisplay, display: DisplayEvent{Kind: DisplayWindow, ID: "main"}}}},
@@ -80,13 +81,13 @@ func TestXMLTagDisposition(t *testing.T) {
 	}
 
 	droppedData := map[string]bool{
-		"skin": true, "compdef": true, "opendialog": true, "radio": true, "detach": true,
+		"compdef": true, "opendialog": true, "radio": true, "detach": true,
 		"playerid": true, "exposecontainer": true, "clearcontainer": true, "menuimage": true,
 		"closedialog": true, "exposedialog": true, "menulink": true, "label": true,
 		"cmdbutton": true, "closebutton": true, "checkbox": true, "streambox": true,
 		"dropdownbox": true, "editbox": true, "updowneditbox": true,
 	}
-	skipped := strings.Fields("mode settings presets p macros keys k palette i stream w cmdline strings names ignores vars scripts dialog builtin panels group toggles misc m display options o font s playerid opendialog detach skin radio menuimage closedialog exposedialog label cmdbutton closebutton checkbox streambox dropdownbox editbox updowneditbox switchquickbar link menulink forging exposecontainer clearcontainer compdef")
+	skipped := strings.Fields("mode settings presets p macros keys k palette i stream w cmdline strings names ignores vars scripts dialog builtin panels group toggles misc m display options o font s playerid opendialog detach radio menuimage closedialog exposedialog label cmdbutton closebutton checkbox streambox dropdownbox editbox updowneditbox switchquickbar link menulink forging exposecontainer clearcontainer compdef")
 	for _, name := range skipped {
 		events := decodeEvents("<" + name + ">body</" + name + ">\n")
 		want := "dropped settings"
@@ -107,7 +108,6 @@ func TestXMLTagDisposition(t *testing.T) {
 		diagnostic string
 	}{
 		{name: "mixed-case dropped settings", input: "<MoDe>body</mOdE>\n", diagnostic: "dropped settings tag: mode"},
-		{name: "mixed-case dropped data", input: "<SkIn>body</sKiN>\n", diagnostic: "dropped data tag: skin"},
 		{name: "mixed-case unknown open and close", input: "<MyStErY>body</mYsTeRy>\n", diagnostic: "unknown DragonRealms tag: mystery"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -128,6 +128,57 @@ func TestXMLTagDisposition(t *testing.T) {
 				t.Fatalf("matching diagnostics = %d: %#v", diagnostics, events)
 			}
 		})
+	}
+}
+
+func TestXMLSkinMetadataIsSilent(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		input string
+		text  string
+	}{
+		{name: "lowercase self-closing", input: "before jalapeño <skin id='health'/> after\n", text: "before jalapeño  after"},
+		{name: "mixed-case paired", input: "before <SkIn variant='compact'>café body</sKiN> after\n", text: "before café body after"},
+		{name: "repeated", input: "before<skin/><SkIn></sKiN><skin/>after\n", text: "beforeafter"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want := decodeFinished(tt.input)
+			if hasDiagnostic(want, "skin") {
+				t.Fatalf("skin diagnostic = %#v", want)
+			}
+			if !hasText(want, tt.text) {
+				t.Fatalf("skin changed body text: %#v", want)
+			}
+			assertFinishedAtEverySplit(t, tt.input, want)
+		})
+	}
+}
+
+func TestXMLSkinMetadataPreservesStateAndOtherDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	input := "<dialogData id='minivitals'><skin id='health'/><progressBar id='health' value='87'/></dialogData><MyStErY>body</mYsTeRy><compDef>unsupported</compDef></skin extra>\n"
+	reducer := newReducer("Hero")
+	var diagnostics []string
+	for _, action := range newStreamDecoder().feed([]byte(input)) {
+		if update, publish := reducer.apply(action); publish {
+			for _, diagnostic := range update.Diagnostics {
+				diagnostics = append(diagnostics, diagnostic.Text)
+			}
+		}
+	}
+	if got := reducer.snapshot().Vitals.Health; got != 87 {
+		t.Fatalf("health = %d, want 87", got)
+	}
+	wantDiagnostics := []string{
+		"unknown DragonRealms tag: mystery",
+		"dropped data tag: compdef",
+		"malformed DragonRealms tag discarded",
+	}
+	if !reflect.DeepEqual(diagnostics, wantDiagnostics) {
+		t.Fatalf("diagnostics = %#v, want %#v", diagnostics, wantDiagnostics)
 	}
 }
 

@@ -44,7 +44,7 @@ var droppedTags = map[string]tagDropClass{
 	"font": dropSettings, "s": dropSettings, "switchquickbar": dropSettings,
 	"link": dropSettings, "forging": dropSettings,
 
-	"skin": dropData, "compdef": dropData, "opendialog": dropData,
+	"compdef": dropData, "opendialog": dropData,
 	"radio": dropData, "detach": dropData, "playerid": dropData,
 	"exposecontainer": dropData, "clearcontainer": dropData, "menuimage": dropData,
 	"closedialog": dropData, "exposedialog": dropData, "menulink": dropData,
@@ -485,6 +485,7 @@ func (d *streamDecoder) handleMarkup(raw []byte) []protocolEvent {
 			kind, severity := parseInjury(attrs["id"], attrs["name"])
 			events = append(events, protocolEvent{kind: eventInjury, name: attrs["id"], value: kind, number: severity})
 		}
+	case "skin":
 	case "settingsinfo":
 		events = append(events, protocolEvent{kind: eventSettingsInfo})
 	case "endsetup":
