@@ -56,6 +56,7 @@ type wireRequest struct {
 	Instructions      string      `json:"instructions"`
 	Input             []inputItem `json:"input"`
 	Tools             []tool      `json:"tools,omitempty"`
+	ToolChoice        string      `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool        `json:"parallel_tool_calls"`
 	Store             bool        `json:"store"`
 	Stream            bool        `json:"stream"`
@@ -99,7 +100,7 @@ func (c *Client) Step(ctx context.Context, request Request) (Result, error) {
 	response, err := c.call(ctx, wireRequest{
 		Model: c.config.Model, Instructions: instructions + "\nCharacter:\n" + c.config.Character,
 		Input: input(history, request.Recent, request.Whispers), Tools: []tool{commandTool(), waitTool()},
-		ParallelToolCalls: false, Store: false, MaxOutputTokens: 512,
+		ToolChoice: "required", ParallelToolCalls: false, Store: false, MaxOutputTokens: 512,
 	})
 	if err != nil {
 		return Result{}, err
@@ -116,8 +117,6 @@ func (c *Client) Step(ctx context.Context, request Request) (Result, error) {
 		records = append(records, "Agent chose: "+result.Command)
 	} else if result.WaitUntil != "" {
 		records = append(records, "Agent waits for "+string(result.WaitUntil)+": "+result.Text)
-	} else {
-		records = append(records, "Agent replied: "+result.Text)
 	}
 	result.History = strings.TrimSpace(strings.Join([]string{history, strings.Join(records, "\n")}, "\n"))
 	return result, nil
@@ -245,16 +244,9 @@ func requestError(ctx context.Context, err error, fallback string) error {
 }
 
 func result(response wireResponse) (Result, error) {
-	text, calls, invalid := collect(response)
-	if invalid || len(calls) > 1 {
+	_, calls, invalid := collect(response)
+	if invalid || len(calls) != 1 {
 		return Result{}, errors.New("agent response invalid")
-	}
-	if len(calls) == 0 {
-		text = terminaltext.Sanitize(text)
-		if strings.TrimSpace(text) == "" || len(text) > outputLimit {
-			return Result{}, errors.New("agent response invalid")
-		}
-		return Result{Text: text}, nil
 	}
 	call := calls[0]
 	switch call.Name {
@@ -343,16 +335,16 @@ func collect(response wireResponse) (string, []outputItem, bool) {
 	var texts []string
 	var calls []outputItem
 	invalid := false
-	textSeen := false
+	messageSeen := false
 	for _, item := range response.Output {
 		switch item.Type {
 		case "function_call":
 			invalid = invalid || len(item.Content) > 0
 			calls = append(calls, item)
 		case "message":
+			messageSeen = true
 			for _, part := range item.Content {
 				if part.Type == "output_text" {
-					textSeen = true
 					texts = append(texts, part.Text)
 				} else {
 					invalid = true
@@ -363,7 +355,7 @@ func collect(response wireResponse) (string, []outputItem, bool) {
 			invalid = true
 		}
 	}
-	return strings.Join(texts, ""), calls, invalid || textSeen && len(calls) > 0
+	return strings.Join(texts, ""), calls, invalid || messageSeen && len(calls) > 0
 }
 
 func truncate(value string, limit int) string {

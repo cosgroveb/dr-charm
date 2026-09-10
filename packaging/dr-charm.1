@@ -104,9 +104,10 @@ must end in \fB/responses\fR. The API key is optional. The other three values
 are required when the block is present. The URL cannot contain embedded
 credentials or a fragment.
 .PP
-The endpoint must support streaming OpenAI Responses requests and function
-tools. Chat Completions endpoints are not supported. \fBdr-charm\fR does not
-set a reasoning effort or service tier.
+The endpoint must support streaming OpenAI Responses requests, function tools,
+and required tool selection for action requests. Chat Completions endpoints
+are not supported. \fBdr-charm\fR does not set a reasoning effort or service
+tier.
 .PP
 Every request sends recent game and familiar text from terminal scrollback to
 the configured endpoint.

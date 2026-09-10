@@ -59,8 +59,9 @@ agent:
 the block. `dr-charm` posts only to the exact URL in `agent.endpoint`. The URL
 cannot contain embedded credentials or a fragment.
 
-The endpoint must support streaming OpenAI Responses requests and function
-tools. Chat Completions endpoints are not supported. The
+The endpoint must support streaming OpenAI Responses requests, function tools,
+and required tool selection for action requests. Chat Completions endpoints
+are not supported. The
 [auto mode guide](auto-mode.md) covers setup and controls.
 
 `dr-charm` does not set a reasoning effort or service tier. Those values come
@@ -77,6 +78,7 @@ transcript to the configured endpoint. Action requests also include:
 - new whispers
 - one `send_command` function tool
 - one `wait` function tool for game-event or player waiting
+- required selection of exactly one action tool for each action request
 
 Summary requests include older conversation and recent game text. `dr-charm`
 does not include your DragonRealms account or password. A proxy may add its own

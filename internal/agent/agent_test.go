@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func TestStepSendsResponsesRequestAndReturnsTextHistory(t *testing.T) {
+func TestStepSendsRequiredResponsesRequestAndReturnsWaitHistory(t *testing.T) {
 	var got wireRequest
 	var raw string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +29,7 @@ func TestStepSendsResponsesRequestAndReturnsTextHistory(t *testing.T) {
 		if err := json.Unmarshal(data, &got); err != nil {
 			t.Error(err)
 		}
-		io.WriteString(w, completedText("Hold position."))
+		io.WriteString(w, completedCall("wait", `{"until":"game_event","message":"Hold position."}`))
 	}))
 	defer server.Close()
 
@@ -39,22 +39,41 @@ func TestStepSendsResponsesRequestAndReturnsTextHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Text != "Hold position." || result.Command != "" || !strings.Contains(result.History, "Player whispered: stay safe\nAgent replied: Hold position.") {
+	if result.Text != "Hold position." || result.Command != "" || result.WaitUntil != WaitForGameEvent || !strings.Contains(result.History, "Player whispered: stay safe\nAgent waits for game_event: Hold position.") {
 		t.Fatalf("result=%+v", result)
 	}
 	if request.History != "Earlier record" || len(request.Whispers) != 1 {
 		t.Fatalf("request mutated: %+v", request)
 	}
-	if got.Model != "local" || got.Store || !got.Stream || got.MaxOutputTokens != 512 || got.ParallelToolCalls || len(got.Tools) != 2 || got.Tools[0].Name != "send_command" || got.Tools[1].Name != "wait" || !got.Tools[0].Strict || !got.Tools[1].Strict {
+	if got.Model != "local" || got.Store || !got.Stream || got.MaxOutputTokens != 512 || got.ParallelToolCalls || got.ToolChoice != "required" || len(got.Tools) != 2 || got.Tools[0].Name != "send_command" || got.Tools[1].Name != "wait" || !got.Tools[0].Strict || !got.Tools[1].Strict {
 		t.Fatalf("wire request=%+v", got)
 	}
-	for _, field := range []string{`"store":false`, `"stream":true`, `"parallel_tool_calls":false`, `"max_output_tokens":512`, `"additionalProperties":false`, `"required":["command"]`} {
+	for _, field := range []string{`"store":false`, `"stream":true`, `"parallel_tool_calls":false`, `"tool_choice":"required"`, `"max_output_tokens":512`, `"additionalProperties":false`, `"required":["command"]`} {
 		if !strings.Contains(raw, field) {
 			t.Fatalf("request body omits %s: %s", field, raw)
 		}
 	}
 	if len(got.Input) != 1 || got.Input[0].Role != "user" || !strings.Contains(got.Instructions, "A cautious Moon Mage.") || !strings.Contains(got.Input[0].Content, "Earlier record") || !strings.Contains(got.Input[0].Content, "A goblin arrives.") || !strings.Contains(got.Input[0].Content, "stay safe") {
 		t.Fatalf("instructions/input missing data: %+v", got)
+	}
+}
+
+func TestStepRequiresExplicitAction(t *testing.T) {
+	var got wireRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		io.WriteString(w, completedText("I will wait for you."))
+	}))
+	defer server.Close()
+
+	result, err := New(Config{Endpoint: server.URL, Model: "m", Character: "c"}).Step(context.Background(), Request{})
+	if err == nil || result != (Result{}) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if got.ToolChoice != "required" {
+		t.Fatalf("tool choice=%q, want required", got.ToolChoice)
 	}
 }
 
@@ -95,7 +114,9 @@ func TestStepRejectsInvalidOutcomesWithoutHistory(t *testing.T) {
 		"failed status":            `{"status":"failed","output":[{"type":"message","content":[{"type":"output_text","text":"act"}]}]}`,
 		"incomplete status":        `{"status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"act"}]}]}`,
 		"mixed":                    `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"act"}]},{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}"}]}`,
+		"empty message and call":   `{"status":"completed","output":[{"type":"message","content":[]},{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}"}]}`,
 		"blank text and call":      `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":""}]},{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}"}]}`,
+		"text-only action":         completedText("act"),
 		"multiple calls":           `{"status":"completed","output":[{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}"},{"type":"function_call","name":"send_command","arguments":"{\"command\":\"north\"}"}]}`,
 		"call with text content":   `{"status":"completed","output":[{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}","content":[{"type":"output_text","text":"hidden"}]}]}`,
 		"call with refusal":        `{"status":"completed","output":[{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}","content":[{"type":"refusal","refusal":"hidden"}]}]}`,
@@ -179,7 +200,7 @@ func TestStepCompactsHistoryWithSameRecentContext(t *testing.T) {
 			io.WriteString(w, completedText(strings.Repeat("s", outputLimit)))
 			return
 		}
-		io.WriteString(w, completedText("Ready."))
+		io.WriteString(w, completedCall("wait", `{"until":"game_event","message":"Ready."}`))
 	}))
 	defer server.Close()
 	history := strings.Repeat("old", historyLimit/3+1)
@@ -187,7 +208,7 @@ func TestStepCompactsHistoryWithSameRecentContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 || len(requests[0].Tools) != 0 || len(requests[1].Tools) != 2 || len(requests[0].Input) != 1 || len(requests[1].Input) != 1 {
+	if len(requests) != 2 || len(requests[0].Tools) != 0 || requests[0].ToolChoice != "" || len(requests[1].Tools) != 2 || requests[1].ToolChoice != "required" || len(requests[0].Input) != 1 || len(requests[1].Input) != 1 {
 		t.Fatalf("requests=%+v", requests)
 	}
 	firstInput, secondInput := requests[0].Input[0].Content, requests[1].Input[0].Content
@@ -206,7 +227,7 @@ func TestStepCompactsOnlyAboveThreshold(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
-		io.WriteString(w, completedText("ok"))
+		io.WriteString(w, completedCall("wait", `{"until":"game_event","message":"ok"}`))
 	}))
 	defer server.Close()
 	client := New(Config{Endpoint: server.URL, Model: "m", Character: "c"})
@@ -244,12 +265,12 @@ func TestStepActionFailureAfterCompactionReturnsNoReplacementHistory(t *testing.
 	}
 }
 
-func TestStepSanitizesAcceptedOutput(t *testing.T) {
-	body := `{"status":"completed","output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"safe\u001b[31m text"}]}]}`
+func TestStepAcceptsStrictWaitOutput(t *testing.T) {
+	body := `{"status":"completed","output":[{"type":"reasoning"},{"type":"function_call","name":"wait","arguments":"{\"until\":\"game_event\",\"message\":\"safe text\"}"}]}`
 	client, closeServer := clientReturning(t, body, http.StatusOK)
 	defer closeServer()
 	result, err := client.Step(context.Background(), Request{})
-	if err != nil || result.Text != "safe text" {
+	if err != nil || result.Text != "safe text" || result.WaitUntil != WaitForGameEvent {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

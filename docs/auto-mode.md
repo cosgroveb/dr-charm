@@ -17,7 +17,8 @@ agent:
 
 Replace each placeholder with a value accepted by your model provider. Leave
 `api_key` empty when the endpoint does not require one. The
-endpoint must support streaming OpenAI Responses requests and function tools.
+endpoint must support streaming OpenAI Responses requests, function tools, and
+`tool_choice: "required"` for action requests.
 A Chat Completions endpoint will not work.
 
 Choose an endpoint you trust. Each request includes recent game and familiar
