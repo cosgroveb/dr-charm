@@ -77,6 +77,52 @@ func TestStepRequiresExplicitAction(t *testing.T) {
 	}
 }
 
+func TestStepReportsSafeActionValidationCategories(t *testing.T) {
+	tests := map[string]struct {
+		body string
+		want string
+	}{
+		"malformed event stream": {body: `{`, want: "agent response malformed event stream"},
+		"invalid output": {body: string(mustJSON(map[string]any{"status": "completed", "output": []any{
+			map[string]any{"type": "message", "content": []any{map[string]any{"type": "refusal"}}},
+		}})), want: "agent response invalid output"},
+		"text only": {body: completedText("I will wait."), want: "agent response missing action"},
+		"mixed message and action": {body: string(mustJSON(map[string]any{"status": "completed", "output": []any{
+			map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "act"}}},
+			map[string]any{"type": "function_call", "name": "send_command", "arguments": `{"command":"look"}`},
+		}})), want: "agent response mixed message and action"},
+		"multiple actions": {body: string(mustJSON(map[string]any{"status": "completed", "output": []any{
+			map[string]any{"type": "function_call", "name": "send_command", "arguments": `{"command":"look"}`},
+			map[string]any{"type": "function_call", "name": "send_command", "arguments": `{"command":"north"}`},
+		}})), want: "agent response multiple actions"},
+		"unknown action":    {body: completedCall("other", `{"command":"look"}`), want: "agent response unknown action"},
+		"malformed command": {body: completedCall("send_command", `{}`), want: "agent response malformed send_command"},
+		"malformed wait":    {body: completedCall("wait", `{"until":"player"}`), want: "agent response malformed wait"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			client, closeServer := clientReturning(t, test.body, http.StatusOK)
+			defer closeServer()
+			if _, err := client.Step(context.Background(), Request{}); err == nil || err.Error() != test.want {
+				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestStepReportsSafeCategoryForUnsuccessfulResponseEvents(t *testing.T) {
+	for _, event := range []string{"response.failed", "response.incomplete", "error"} {
+		t.Run(event, func(t *testing.T) {
+			body := fmt.Sprintf("data: {\"type\":%q}\n\n", event)
+			client, closeServer := clientReturning(t, body, http.StatusOK)
+			defer closeServer()
+			if _, err := client.Step(context.Background(), Request{}); err == nil || err.Error() != "agent response unsuccessful" {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestStepReturnsStrictWaitResult(t *testing.T) {
 	for _, test := range []struct {
 		name, until, message string
@@ -245,6 +291,15 @@ func TestStepCompactionFailureReturnsNoReplacementHistory(t *testing.T) {
 	result, err := client.Step(context.Background(), Request{History: strings.Repeat("x", historyLimit+1)})
 	if err == nil || !strings.Contains(err.Error(), "agent compaction failed") || result != (Result{}) {
 		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestStepReportsSafeCategoryForInvalidCompactionText(t *testing.T) {
+	client, closeServer := clientReturning(t, completedCall("send_command", `{"command":"secret"}`), http.StatusOK)
+	defer closeServer()
+	_, err := client.Step(context.Background(), Request{History: strings.Repeat("x", historyLimit+1)})
+	if err == nil || err.Error() != "agent compaction failed: agent response invalid output" {
+		t.Fatalf("error=%v", err)
 	}
 }
 

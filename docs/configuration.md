@@ -110,7 +110,8 @@ prompt-driven behavior.
 After agent history grows past 32 KiB, `dr-charm` asks the model to condense it
 before the next action request. Neither history nor recent game text is saved
 when you quit. Whispers and agent replies never enter the session transcript.
-When logging is on, commands the agent sends do.
+When logging is on, commands the agent sends and sanitized agent failure
+categories do.
 
 ## Command-line options
 
@@ -140,9 +141,10 @@ paths when set.
 Logging starts with each session. F4 turns logging on or off while the client
 runs. The status bar shows `LOG on`, `LOG off`, or `LOG failed`.
 
-Transcripts contain game output and player commands. New log directories use
-mode 0700 and new files use mode 0600. When logging starts, `dr-charm` also sets
-an existing log directory to 0700 and matching transcript files to 0600.
+Transcripts contain game output, player and agent commands, and sanitized agent
+failure categories. New log directories use mode 0700 and new files use mode
+0600. When logging starts, `dr-charm` also sets an existing log directory to
+0700 and matching transcript files to 0600.
 
 The logger uses soft limits of 30 files and 100 MiB. When logging starts,
 `dr-charm` removes the oldest closed matching files when either limit is

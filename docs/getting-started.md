@@ -6,8 +6,8 @@ Install `dr-charm` before you continue. You also need a DragonRealms account
 with a character. See the [install instructions](../README.md#install) if
 needed.
 
-`dr-charm` logs the session by default. The transcript contains game output
-and the commands you type.
+`dr-charm` logs the session by default. The transcript contains game output,
+commands, and sanitized agent failures.
 
 ## Create the configuration file
 

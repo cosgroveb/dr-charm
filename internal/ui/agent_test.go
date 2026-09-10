@@ -293,6 +293,24 @@ func TestAgentCommandUsesAliasPathAndCommitsHistoryAfterSend(t *testing.T) {
 	}
 }
 
+func TestAgentErrorWritesSafeSystemErrorToTranscriptLog(t *testing.T) {
+	model := newAgentTestModel(t, agentFunc(func(context.Context, agent.Request) (agent.Result, error) {
+		return agent.Result{}, errors.New("agent response malformed wait")
+	}))
+	model.agent.enabled = true
+	logger := &fakeLogger{enabled: true}
+	model.logger = logger
+
+	model.handleAgentResult(model.wakeAgent(false)().(agentResultMsg))
+
+	if len(logger.writes) != 1 || logger.writes[0] != "agent failed: agent response malformed wait" {
+		t.Fatalf("log writes=%q", logger.writes)
+	}
+	if len(model.pendingTranscript) != 1 || !contains(model.pendingTranscript[0], logger.writes[0]) {
+		t.Fatalf("transcript=%q log=%q", model.pendingTranscript, logger.writes)
+	}
+}
+
 func TestAgentReconnectWaitsForCanceledRequestBeforeRestart(t *testing.T) {
 	requests := make(chan agent.Request, 2)
 	release := make(chan struct{})

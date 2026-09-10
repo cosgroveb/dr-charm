@@ -62,7 +62,8 @@ password: YOUR_PASSWORD
 character: YOUR_CHARACTER_NAME
 ```
 
-The client records game output and commands in a session log.
+The client records game output, commands, and sanitized agent failures in a
+session log.
 
 Run `dr-charm` again. Wait for the dashboard to show `READY`, type `look`, and
 press Enter. Game output appears above the dashboard in terminal scrollback.

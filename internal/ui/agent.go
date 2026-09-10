@@ -134,7 +134,9 @@ func (m *EnhancedModel) handleAgentResult(message agentResultMsg) tea.Cmd {
 	if message.err != nil {
 		if !errors.Is(message.err, context.Canceled) {
 			m.agent.status = "error"
-			m.appendSystem("agent failed: " + safeAgentText(message.err.Error()))
+			text := "agent failed: " + safeAgentText(message.err.Error())
+			m.appendSystem(text)
+			m.writeLog(text)
 		}
 		return nil
 	}

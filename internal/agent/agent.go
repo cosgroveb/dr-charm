@@ -20,6 +20,16 @@ const (
 	historyLimit = 32 * 1024
 	outputLimit  = 8 * 1024
 	bodyLimit    = 1 << 20
+
+	responseMalformedEventStream = "agent response malformed event stream"
+	responseUnsuccessful         = "agent response unsuccessful"
+	responseInvalidOutput        = "agent response invalid output"
+	responseMissingAction        = "agent response missing action"
+	responseMixedMessageAction   = "agent response mixed message and action"
+	responseMultipleActions      = "agent response multiple actions"
+	responseUnknownAction        = "agent response unknown action"
+	responseMalformedCommand     = "agent response malformed send_command"
+	responseMalformedWait        = "agent response malformed wait"
 )
 
 //go:embed prompt.txt
@@ -182,16 +192,16 @@ func (c *Client) call(ctx context.Context, payload wireRequest) (wireResponse, e
 		return wireResponse{}, errors.New("agent response too large")
 	}
 	if !utf8.Valid(data) {
-		return wireResponse{}, errors.New("agent response invalid")
+		return wireResponse{}, errors.New(responseMalformedEventStream)
 	}
-	decoded, ok := decodeStream(data)
-	if !ok {
-		return wireResponse{}, errors.New("agent response invalid")
+	decoded, problem := decodeStream(data)
+	if problem != "" {
+		return wireResponse{}, errors.New(problem)
 	}
 	return decoded, nil
 }
 
-func decodeStream(data []byte) (wireResponse, bool) {
+func decodeStream(data []byte) (wireResponse, string) {
 	var response wireResponse
 	completed := false
 	for _, line := range bytes.Split(data, []byte("\n")) {
@@ -212,25 +222,28 @@ func decodeStream(data []byte) (wireResponse, bool) {
 		}
 		decoder := json.NewDecoder(bytes.NewReader(payload))
 		if decoder.Decode(&event) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-			return wireResponse{}, false
+			return wireResponse{}, responseMalformedEventStream
 		}
 		switch event.Type {
 		case "response.output_item.done":
 			if completed {
-				return wireResponse{}, false
+				return wireResponse{}, responseMalformedEventStream
 			}
 			response.Output = append(response.Output, event.Item)
 		case "response.completed":
 			if completed || event.Response.Status != "completed" {
-				return wireResponse{}, false
+				return wireResponse{}, responseMalformedEventStream
 			}
 			completed = true
 			response.Status = event.Response.Status
 		case "response.failed", "response.incomplete", "error":
-			return wireResponse{}, false
+			return wireResponse{}, responseUnsuccessful
 		}
 	}
-	return response, completed
+	if !completed {
+		return wireResponse{}, responseMalformedEventStream
+	}
+	return response, ""
 }
 
 func requestError(ctx context.Context, err error, fallback string) error {
@@ -244,29 +257,38 @@ func requestError(ctx context.Context, err error, fallback string) error {
 }
 
 func result(response wireResponse) (Result, error) {
-	_, calls, invalid := collect(response)
-	if invalid || len(calls) != 1 {
-		return Result{}, errors.New("agent response invalid")
+	_, calls, invalid, messageSeen := collect(response)
+	if invalid {
+		return Result{}, errors.New(responseInvalidOutput)
+	}
+	if messageSeen && len(calls) > 0 {
+		return Result{}, errors.New(responseMixedMessageAction)
+	}
+	if len(calls) == 0 {
+		return Result{}, errors.New(responseMissingAction)
+	}
+	if len(calls) > 1 {
+		return Result{}, errors.New(responseMultipleActions)
 	}
 	call := calls[0]
 	switch call.Name {
 	case "send_command":
 		command, ok := commandArgument(call.Arguments)
 		if !ok || !utf8.ValidString(command) || len(command) > 4096 || strings.ContainsAny(command, "\r\n\x00") {
-			return Result{}, errors.New("agent response invalid")
+			return Result{}, errors.New(responseMalformedCommand)
 		}
 		if terminaltext.Sanitize(command) != command || strings.TrimSpace(command) == "" {
-			return Result{}, errors.New("agent response invalid")
+			return Result{}, errors.New(responseMalformedCommand)
 		}
 		return Result{Command: command}, nil
 	case "wait":
 		until, message, ok := waitArguments(call.Arguments)
 		if !ok || !utf8.ValidString(message) || len(message) > outputLimit || terminaltext.Sanitize(message) != message {
-			return Result{}, errors.New("agent response invalid")
+			return Result{}, errors.New(responseMalformedWait)
 		}
 		return Result{Text: message, WaitUntil: until}, nil
 	default:
-		return Result{}, errors.New("agent response invalid")
+		return Result{}, errors.New(responseUnknownAction)
 	}
 }
 
@@ -323,15 +345,15 @@ func commandArgument(raw string) (string, bool) {
 }
 
 func textResult(response wireResponse) (string, error) {
-	text, calls, invalid := collect(response)
+	text, calls, invalid, _ := collect(response)
 	text = terminaltext.Sanitize(text)
 	if invalid || len(calls) > 0 || strings.TrimSpace(text) == "" {
-		return "", errors.New("agent response invalid")
+		return "", errors.New(responseInvalidOutput)
 	}
 	return text, nil
 }
 
-func collect(response wireResponse) (string, []outputItem, bool) {
+func collect(response wireResponse) (string, []outputItem, bool, bool) {
 	var texts []string
 	var calls []outputItem
 	invalid := false
@@ -355,7 +377,7 @@ func collect(response wireResponse) (string, []outputItem, bool) {
 			invalid = true
 		}
 	}
-	return strings.Join(texts, ""), calls, invalid || messageSeen && len(calls) > 0
+	return strings.Join(texts, ""), calls, invalid, messageSeen
 }
 
 func truncate(value string, limit int) string {
