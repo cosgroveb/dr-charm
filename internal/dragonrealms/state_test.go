@@ -572,6 +572,127 @@ func TestReducerMarksRoomObservationOnlyAtPrompt(t *testing.T) {
 	}
 }
 
+func TestReducerRoomOccupantRefreshDoesNotMarkObservation(t *testing.T) {
+	decoder := newStreamDecoder()
+	reducer := newReducer("Hero")
+	applyInput := func(input string) []Update {
+		t.Helper()
+		var updates []Update
+		for start := 0; start < len(input); start += 7 {
+			end := min(start+7, len(input))
+			for _, action := range decoder.feed([]byte(input[start:end])) {
+				if update, published := reducer.apply(action); published {
+					updates = append(updates, update)
+				}
+			}
+		}
+		return updates
+	}
+	promptUpdate := func(updates []Update) Update {
+		t.Helper()
+		for _, update := range updates {
+			if update.Prompted {
+				return update
+			}
+		}
+		t.Fatalf("updates contain no prompt: %#v", updates)
+		return Update{}
+	}
+
+	initial := promptUpdate(applyInput("<component id='room title'>[Square]</component><component id='room desc'>A quiet square.</component><component id='room objs'><pushBold/>a rat<popBold/>, a bench</component><component id='room players'>A friend</component><prompt>&gt;</prompt>"))
+	if !initial.RoomObserved {
+		t.Fatalf("initial room was not observed: %#v", initial)
+	}
+
+	tests := []struct {
+		name          string
+		input         string
+		display       string
+		wantPlayers   []string
+		wantObjects   []string
+		wantCreatures []string
+	}{
+		{
+			name:          "player arrival",
+			input:         "A visitor arrives.\n<component id='room players'>A friend and a visitor</component><prompt>&gt;</prompt>",
+			display:       "A visitor arrives.",
+			wantPlayers:   []string{"A friend", "a visitor"},
+			wantObjects:   []string{"a rat", "a bench"},
+			wantCreatures: []string{"a rat"},
+		},
+		{
+			name:          "player clear",
+			input:         "Everyone leaves.\n<component id='room players'/><prompt>&gt;</prompt>",
+			display:       "Everyone leaves.",
+			wantObjects:   []string{"a rat", "a bench"},
+			wantCreatures: []string{"a rat"},
+		},
+		{
+			name:          "object update",
+			input:         "A cart arrives.\n<component id='room objs'><pushBold/>a cart<popBold/>, a bench</component><prompt>&gt;</prompt>",
+			display:       "A cart arrives.",
+			wantObjects:   []string{"a cart", "a bench"},
+			wantCreatures: []string{"a cart"},
+		},
+		{
+			name:    "object clear",
+			input:   "Someone takes everything.\n<component id='room objs'/><prompt>&gt;</prompt>",
+			display: "Someone takes everything.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updates := applyInput(tt.input)
+			update := promptUpdate(updates)
+			if update.RoomObserved {
+				t.Fatalf("occupant refresh marked room observed: %#v", update)
+			}
+			room := update.Snapshot.Room
+			if room.Description != "A quiet square." || !reflect.DeepEqual(room.Players, tt.wantPlayers) || !reflect.DeepEqual(room.Objects, tt.wantObjects) || !reflect.DeepEqual(room.Creatures, tt.wantCreatures) {
+				t.Fatalf("room state = %#v", room)
+			}
+			var displays []string
+			for _, item := range updates {
+				for _, display := range item.Display {
+					displays = append(displays, display.Text)
+				}
+			}
+			if !reflect.DeepEqual(displays, []string{tt.display}) {
+				t.Fatalf("display = %#v, want %q", displays, tt.display)
+			}
+		})
+	}
+}
+
+func TestReducerDescriptionWithOccupantsMarksRoomObservation(t *testing.T) {
+	decoder := newStreamDecoder()
+	reducer := newReducer("Hero")
+	inputs := []string{
+		"<component id='room title'>[Square]</component><component id='room desc'>A quiet square.</component><component id='room players'>A friend</component><component id='room objs'><pushBold/>a rat<popBold/></component><prompt>&gt;</prompt>",
+		"<component id='room desc'>A quiet square.</component><component id='room players'/><component id='room objs'/><prompt>&gt;</prompt>",
+	}
+	for i, input := range inputs {
+		var prompted *Update
+		for _, chunk := range []string{input[:13], input[13:41], input[41:]} {
+			for _, action := range decoder.feed([]byte(chunk)) {
+				if update, published := reducer.apply(action); published && update.Prompted {
+					copy := update
+					prompted = &copy
+				}
+			}
+		}
+		if prompted == nil || !prompted.RoomObserved || prompted.Snapshot.Room.Description != "A quiet square." {
+			t.Fatalf("description observation %d = %#v", i, prompted)
+		}
+		if i == 0 && (!reflect.DeepEqual(prompted.Snapshot.Room.Players, []string{"A friend"}) || !reflect.DeepEqual(prompted.Snapshot.Room.Creatures, []string{"a rat"})) {
+			t.Fatalf("combined room state = %#v", prompted.Snapshot.Room)
+		}
+		if i == 1 && (len(prompted.Snapshot.Room.Players) != 0 || len(prompted.Snapshot.Room.Objects) != 0 || len(prompted.Snapshot.Room.Creatures) != 0) {
+			t.Fatalf("combined room clears = %#v", prompted.Snapshot.Room)
+		}
+	}
+}
+
 func TestReducerRoomObservationFollowsDecoderActionsAcrossSplitRooms(t *testing.T) {
 	input := "<component id='room title'>[One]</component><component id='room desc'>first</component><prompt time='1'>&gt;</prompt>text<component id='room title'>[Two]</component><component id='room exits'><d>north</d></component><prompt time='2'>&gt;</prompt>"
 	decoder := newStreamDecoder()

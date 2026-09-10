@@ -77,6 +77,28 @@ func TestClientTranslatesSessionUpdate(t *testing.T) {
 	}
 }
 
+func TestTranslateAppendsRoomOnlyForObservation(t *testing.T) {
+	update := dragonrealms.Update{
+		Prompted: true,
+		Snapshot: dragonrealms.Snapshot{
+			Room:   dragonrealms.Room{Title: "[Square]", Description: "A quiet square.", Objects: []string{"a bench"}, Players: []string{"A visitor"}},
+			Prompt: ">",
+		},
+		Display: []dragonrealms.DisplayEvent{{Kind: dragonrealms.DisplayText, Stream: "main", Text: "A visitor arrives."}},
+	}
+
+	got := Translate(update)
+	if len(got.Entries) != 1 || got.Entries[0].Text != "A visitor arrives." {
+		t.Fatalf("occupant refresh entries = %#v", got.Entries)
+	}
+
+	update.RoomObserved = true
+	got = Translate(update)
+	if len(got.Entries) != 2 || got.Entries[0].Text != "A visitor arrives." || !strings.Contains(got.Entries[1].Text, "A quiet square.") {
+		t.Fatalf("room observation entries = %#v", got.Entries)
+	}
+}
+
 func TestClientSanitizesNoticesAndVisibleFields(t *testing.T) {
 	source := &fakeSource{updates: make(chan dragonrealms.Update, 1)}
 	source.updates <- dragonrealms.Update{

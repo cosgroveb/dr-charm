@@ -311,11 +311,9 @@ func (r *reducer) applyComponent(event protocolEvent) {
 		r.pendingRoomObservation = true
 		r.pendingRoom.Exits = splitRoomValues(event.value)
 	case "room objs":
-		r.pendingRoomObservation = true
 		r.pendingRoom.Objects = splitRoomValues(event.value)
 		r.pendingRoom.Creatures = filterLiveCreatures(event.items)
 	case "room players":
-		r.pendingRoomObservation = true
 		r.pendingRoom.Players = splitRoomValues(event.value)
 	case "pc name":
 		r.public.Character = strings.TrimSpace(event.value)
