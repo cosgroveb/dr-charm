@@ -93,7 +93,7 @@ Aliases for attack, kill, skin, arrange, and \fBloot all\fR.
 Auto mode is available when the configuration file contains an \fBagent\fR block.
 It starts off. Press F6 to enable it. Once the status bar shows \fBREADY\fR, a
 new DragonRealms prompt or a whisper wakes the agent. The agent may reply in
-the client or choose one game command.
+the client, choose one game command, or wait for a game event or player whisper.
 .PP
 Whispers and replies use bold text with reverse-video \fB[whisper]\fR and
 \fB[agent]\fR labels. Agent commands start with \fB[agent] >\fR.
@@ -116,10 +116,12 @@ grows long, \fBdr-charm\fR asks the endpoint to summarize its older parts. It
 does not add your DragonRealms account or password to requests.
 .PP
 The status bar shows \fBAGENT off\fR, \fBAGENT idle\fR,
-\fBAGENT thinking\fR, or \fBAGENT error\fR. F6 cancels a request when turning
-auto mode off. A new prompt or whisper cancels the current request before
-starting another one. Disconnecting or quitting also cancels it. The client
-discards agent conversation when it exits.
+\fBAGENT thinking\fR, \fBAGENT waiting\fR, \fBAGENT paused\fR, or
+\fBAGENT error\fR. A waiting agent wakes for a prompt or whisper. A paused
+agent wakes only for a whisper. F6 cancels a request when turning auto mode
+off. Turning it on again restores prompt-driven behavior. A new eligible wake
+cancels the current request before starting another one. Disconnecting or
+quitting also cancels it. The client discards agent conversation when it exits.
 .SH FILES
 .TP
 .I $XDG_CONFIG_HOME/dr-charm/config.yaml

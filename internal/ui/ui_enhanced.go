@@ -189,7 +189,7 @@ func (m EnhancedModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, emit
 		}
 		if message.Prompted && message.Connection == presentation.Ready {
-			return m, tea.Sequence(emit, m.wakeAgent(), wait)
+			return m, tea.Sequence(emit, m.wakeAgent(true), wait)
 		}
 		return m, tea.Sequence(emit, wait)
 	case agentResultMsg:

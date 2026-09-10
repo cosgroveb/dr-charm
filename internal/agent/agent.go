@@ -30,7 +30,17 @@ type Request struct {
 	History, Recent string
 	Whispers        []string
 }
-type Result struct{ Command, Text, History string }
+type WaitUntil string
+
+const (
+	WaitForGameEvent WaitUntil = "game_event"
+	WaitForPlayer    WaitUntil = "player"
+)
+
+type Result struct {
+	Command, Text, History string
+	WaitUntil              WaitUntil
+}
 
 type Client struct {
 	config Config
@@ -88,7 +98,7 @@ func (c *Client) Step(ctx context.Context, request Request) (Result, error) {
 	}
 	response, err := c.call(ctx, wireRequest{
 		Model: c.config.Model, Instructions: instructions + "\nCharacter:\n" + c.config.Character,
-		Input: input(history, request.Recent, request.Whispers), Tools: []tool{commandTool()},
+		Input: input(history, request.Recent, request.Whispers), Tools: []tool{commandTool(), waitTool()},
 		ParallelToolCalls: false, Store: false, MaxOutputTokens: 512,
 	})
 	if err != nil {
@@ -104,6 +114,8 @@ func (c *Client) Step(ctx context.Context, request Request) (Result, error) {
 	}
 	if result.Command != "" {
 		records = append(records, "Agent chose: "+result.Command)
+	} else if result.WaitUntil != "" {
+		records = append(records, "Agent waits for "+string(result.WaitUntil)+": "+result.Text)
 	} else {
 		records = append(records, "Agent replied: "+result.Text)
 	}
@@ -115,6 +127,16 @@ func commandTool() tool {
 	return tool{Type: "function", Name: "send_command", Description: "Send one DragonRealms command.", Strict: true, Parameters: map[string]any{
 		"type": "object", "additionalProperties": false, "required": []string{"command"},
 		"properties": map[string]any{"command": map[string]any{"type": "string"}},
+	}}
+}
+
+func waitTool() tool {
+	return tool{Type: "function", Name: "wait", Description: "Wait for a game event or the player before acting again.", Strict: true, Parameters: map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"until", "message"},
+		"properties": map[string]any{
+			"until":   map[string]any{"type": "string", "enum": []string{string(WaitForGameEvent), string(WaitForPlayer)}},
+			"message": map[string]any{"type": "string"},
+		},
 	}}
 }
 
@@ -235,17 +257,62 @@ func result(response wireResponse) (Result, error) {
 		return Result{Text: text}, nil
 	}
 	call := calls[0]
-	if call.Name != "send_command" {
+	switch call.Name {
+	case "send_command":
+		command, ok := commandArgument(call.Arguments)
+		if !ok || !utf8.ValidString(command) || len(command) > 4096 || strings.ContainsAny(command, "\r\n\x00") {
+			return Result{}, errors.New("agent response invalid")
+		}
+		if terminaltext.Sanitize(command) != command || strings.TrimSpace(command) == "" {
+			return Result{}, errors.New("agent response invalid")
+		}
+		return Result{Command: command}, nil
+	case "wait":
+		until, message, ok := waitArguments(call.Arguments)
+		if !ok || !utf8.ValidString(message) || len(message) > outputLimit || terminaltext.Sanitize(message) != message {
+			return Result{}, errors.New("agent response invalid")
+		}
+		return Result{Text: message, WaitUntil: until}, nil
+	default:
 		return Result{}, errors.New("agent response invalid")
 	}
-	command, ok := commandArgument(call.Arguments)
-	if !ok || !utf8.ValidString(command) || len(command) > 4096 || strings.ContainsAny(command, "\r\n\x00") {
-		return Result{}, errors.New("agent response invalid")
+}
+
+func waitArguments(raw string) (WaitUntil, string, bool) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return "", "", false
 	}
-	if terminaltext.Sanitize(command) != command || strings.TrimSpace(command) == "" {
-		return Result{}, errors.New("agent response invalid")
+	var until WaitUntil
+	var message string
+	seen := map[string]bool{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return "", "", false
+		}
+		name, ok := key.(string)
+		if !ok || seen[name] {
+			return "", "", false
+		}
+		seen[name] = true
+		switch name {
+		case "until":
+			if decoder.Decode(&until) != nil || (until != WaitForGameEvent && until != WaitForPlayer) {
+				return "", "", false
+			}
+		case "message":
+			var rawMessage json.RawMessage
+			if decoder.Decode(&rawMessage) != nil || bytes.Equal(bytes.TrimSpace(rawMessage), []byte("null")) || json.Unmarshal(rawMessage, &message) != nil {
+				return "", "", false
+			}
+		default:
+			return "", "", false
+		}
 	}
-	return Result{Command: command}, nil
+	token, err = decoder.Token()
+	return until, message, err == nil && token == json.Delim('}') && len(seen) == 2 && decoder.Decode(&struct{}{}) == io.EOF
 }
 
 func commandArgument(raw string) (string, bool) {

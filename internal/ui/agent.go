@@ -20,16 +20,26 @@ type agentStepper interface {
 }
 
 type agentState struct {
-	client          agentStepper
-	ctx             context.Context
-	enabled         bool
-	status          string
-	history, recent string
-	whispers        []string
-	cancel          context.CancelFunc
-	generation      uint64
-	restart         bool
+	client           agentStepper
+	ctx              context.Context
+	enabled          bool
+	status           string
+	history, recent  string
+	whispers         []string
+	cancel           context.CancelFunc
+	cancelGeneration uint64
+	generation       uint64
+	restart          bool
+	phase            agentPhase
 }
+
+type agentPhase uint8
+
+const (
+	agentActive agentPhase = iota
+	agentWaitingForGameEvent
+	agentWaitingForPlayer
+)
 
 type agentResultMsg struct {
 	generation uint64
@@ -48,6 +58,7 @@ func (m *EnhancedModel) toggleAgent() {
 		return
 	}
 	m.agent.enabled = true
+	m.agent.phase = agentActive
 	m.agent.status = "idle"
 }
 
@@ -59,12 +70,26 @@ func (m *EnhancedModel) cancelAgent() {
 	m.agent.restart = false
 	m.agent.whispers = nil
 	if m.agent.enabled {
-		m.agent.status = "idle"
+		m.agent.status = statusForAgentPhase(m.agent.phase)
 	}
 }
 
-func (m *EnhancedModel) wakeAgent() tea.Cmd {
+func statusForAgentPhase(phase agentPhase) string {
+	switch phase {
+	case agentWaitingForGameEvent:
+		return "waiting"
+	case agentWaitingForPlayer:
+		return "paused"
+	default:
+		return "idle"
+	}
+}
+
+func (m *EnhancedModel) wakeAgent(prompt bool) tea.Cmd {
 	if !m.agent.enabled || m.snapshot.Connection != presentation.Ready {
+		return nil
+	}
+	if prompt && m.agent.phase == agentWaitingForPlayer {
 		return nil
 	}
 	if m.agent.cancel != nil {
@@ -77,6 +102,7 @@ func (m *EnhancedModel) wakeAgent() tea.Cmd {
 	generation := m.agent.generation
 	ctx, cancel := context.WithCancel(m.agent.ctx)
 	m.agent.cancel = cancel
+	m.agent.cancelGeneration = generation
 	m.agent.status = "thinking"
 	request := agent.Request{History: m.agent.history, Recent: m.agent.recent, Whispers: append([]string(nil), m.agent.whispers...)}
 	return func() tea.Msg {
@@ -91,11 +117,14 @@ func (m *EnhancedModel) wakeAgent() tea.Cmd {
 
 func (m *EnhancedModel) handleAgentResult(message agentResultMsg) tea.Cmd {
 	stale := message.generation != m.agent.generation
-	m.agent.cancel = nil
+	if m.agent.cancelGeneration == message.generation {
+		m.agent.cancel = nil
+		m.agent.cancelGeneration = 0
+	}
 	if stale {
 		if m.agent.restart && m.agent.enabled && m.snapshot.Connection == presentation.Ready {
 			m.agent.restart = false
-			return m.wakeAgent()
+			return m.wakeAgent(false)
 		}
 		return nil
 	}
@@ -114,12 +143,22 @@ func (m *EnhancedModel) handleAgentResult(message agentResultMsg) tea.Cmd {
 			m.agent.status = "error"
 			return nil
 		}
-	} else {
+	} else if message.result.Text != "" {
 		m.appendAgentMessage("[agent]", message.result.Text)
 	}
 	m.agent.history = message.result.History
 	m.agent.whispers = nil
-	m.agent.status = "idle"
+	switch message.result.WaitUntil {
+	case agent.WaitForGameEvent:
+		m.agent.phase = agentWaitingForGameEvent
+		m.agent.status = "waiting"
+	case agent.WaitForPlayer:
+		m.agent.phase = agentWaitingForPlayer
+		m.agent.status = "paused"
+	default:
+		m.agent.phase = agentActive
+		m.agent.status = "idle"
+	}
 	return nil
 }
 
@@ -135,7 +174,7 @@ func (m *EnhancedModel) whisper() tea.Cmd {
 	m.agent.whispers = append(m.agent.whispers, value)
 	m.appendAgentMessage("[whisper]", value)
 	m.input.Reset()
-	return m.wakeAgent()
+	return m.wakeAgent(false)
 }
 
 func (m *EnhancedModel) appendAgentMessage(label, text string) {

@@ -45,7 +45,7 @@ func TestStepSendsResponsesRequestAndReturnsTextHistory(t *testing.T) {
 	if request.History != "Earlier record" || len(request.Whispers) != 1 {
 		t.Fatalf("request mutated: %+v", request)
 	}
-	if got.Model != "local" || got.Store || !got.Stream || got.MaxOutputTokens != 512 || got.ParallelToolCalls || len(got.Tools) != 1 || got.Tools[0].Name != "send_command" || !got.Tools[0].Strict {
+	if got.Model != "local" || got.Store || !got.Stream || got.MaxOutputTokens != 512 || got.ParallelToolCalls || len(got.Tools) != 2 || got.Tools[0].Name != "send_command" || got.Tools[1].Name != "wait" || !got.Tools[0].Strict || !got.Tools[1].Strict {
 		t.Fatalf("wire request=%+v", got)
 	}
 	for _, field := range []string{`"store":false`, `"stream":true`, `"parallel_tool_calls":false`, `"max_output_tokens":512`, `"additionalProperties":false`, `"required":["command"]`} {
@@ -55,6 +55,24 @@ func TestStepSendsResponsesRequestAndReturnsTextHistory(t *testing.T) {
 	}
 	if len(got.Input) != 1 || got.Input[0].Role != "user" || !strings.Contains(got.Instructions, "A cautious Moon Mage.") || !strings.Contains(got.Input[0].Content, "Earlier record") || !strings.Contains(got.Input[0].Content, "A goblin arrives.") || !strings.Contains(got.Input[0].Content, "stay safe") {
 		t.Fatalf("instructions/input missing data: %+v", got)
+	}
+}
+
+func TestStepReturnsStrictWaitResult(t *testing.T) {
+	for _, test := range []struct {
+		name, until, message string
+	}{
+		{name: "game event", until: "game_event", message: "Watching the guard."},
+		{name: "player", until: "player", message: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, closeServer := clientReturning(t, completedCall("wait", fmt.Sprintf(`{"until":%q,"message":%q}`, test.until, test.message)), http.StatusOK)
+			defer closeServer()
+			result, err := client.Step(context.Background(), Request{})
+			if err != nil || result.WaitUntil != WaitUntil(test.until) || result.Text != test.message || !strings.Contains(result.History, "Agent waits for "+test.until+":") {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
 	}
 }
 
@@ -82,6 +100,13 @@ func TestStepRejectsInvalidOutcomesWithoutHistory(t *testing.T) {
 		"call with text content":   `{"status":"completed","output":[{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}","content":[{"type":"output_text","text":"hidden"}]}]}`,
 		"call with refusal":        `{"status":"completed","output":[{"type":"function_call","name":"send_command","arguments":"{\"command\":\"look\"}","content":[{"type":"refusal","refusal":"hidden"}]}]}`,
 		"unknown call":             completedCall("other", `{"command":"look"}`),
+		"wait missing message":     completedCall("wait", `{"until":"player"}`),
+		"wait message null":        completedCall("wait", `{"until":"player","message":null}`),
+		"wait missing until":       completedCall("wait", `{"message":"hold"}`),
+		"wait extra field":         completedCall("wait", `{"until":"player","message":"hold","extra":true}`),
+		"wait duplicate field":     completedCall("wait", `{"until":"player","until":"game_event","message":"hold"}`),
+		"wait invalid until":       completedCall("wait", `{"until":"forever","message":"hold"}`),
+		"wait control message":     completedCall("wait", `{"until":"player","message":"\u001b[31m"}`),
 		"uppercase argument":       completedCall("send_command", `{"Command":"look"}`),
 		"duplicate argument":       completedCall("send_command", `{"command":"look","command":"north"}`),
 		"unknown argument":         completedCall("send_command", `{"command":"look","other":1}`),
@@ -118,6 +143,7 @@ func TestStepRejectsBoundsAndUnsafeBytes(t *testing.T) {
 	tests := map[string]string{
 		"large text":    completedText(strings.Repeat("x", outputLimit+1)),
 		"large command": completedCall("send_command", fmt.Sprintf(`{"command":%q}`, strings.Repeat("x", 4097))),
+		"large wait":    completedCall("wait", fmt.Sprintf(`{"until":"player","message":%q}`, strings.Repeat("x", outputLimit+1))),
 		"invalid UTF-8": "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"" + string([]byte{0xff}) + "\"}]}}\n\n",
 	}
 	for name, body := range tests {
@@ -161,7 +187,7 @@ func TestStepCompactsHistoryWithSameRecentContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 || len(requests[0].Tools) != 0 || len(requests[1].Tools) != 1 || len(requests[0].Input) != 1 || len(requests[1].Input) != 1 {
+	if len(requests) != 2 || len(requests[0].Tools) != 0 || len(requests[1].Tools) != 2 || len(requests[0].Input) != 1 || len(requests[1].Input) != 1 {
 		t.Fatalf("requests=%+v", requests)
 	}
 	firstInput, secondInput := requests[0].Input[0].Content, requests[1].Input[0].Content

@@ -76,6 +76,7 @@ transcript to the configured endpoint. Action requests also include:
 - earlier player-agent conversation and command choices
 - new whispers
 - one `send_command` function tool
+- one `wait` function tool for game-event or player waiting
 
 Summary requests include older conversation and recent game text. `dr-charm`
 does not include your DragonRealms account or password. A proxy may add its own
@@ -88,16 +89,20 @@ instructions before forwarding the request.
 | `AGENT off` | Auto mode is available and disabled. |
 | `AGENT idle` | Auto mode is waiting for a new game prompt or whisper. |
 | `AGENT thinking` | A model request is in progress. |
-| `AGENT error` | The last request failed. The next prompt or whisper tries again. |
+| `AGENT waiting` | The agent waits for a relevant game event. A prompt or whisper may wake it. |
+| `AGENT paused` | The agent waits for a player whisper. Prompts do not wake it. |
+| `AGENT error` | The last request failed. The next eligible prompt or whisper tries again. |
 
 Auto mode starts off. F6 toggles it without making a request. When auto mode is
 on, Enter sends input-line text to the agent as a whisper instead of sending it
 to DragonRealms. The agent can reply or choose one command.
 
-A new prompt or whisper while the agent is thinking cancels the current request
-and replaces it after cancellation finishes. F6, a lost connection, quitting,
-or closing the session also cancels a request. Auto mode stays selected across
-a reconnect, then waits for a new prompt or whisper.
+A new eligible prompt or whisper while the agent is thinking cancels the
+current request and replaces it after cancellation finishes. A paused agent
+only accepts a new whisper. F6, a lost connection, quitting, or closing the
+session also cancels a request. Auto mode stays selected across a reconnect and
+preserves whether it was paused. Turning F6 off and back on returns it to
+prompt-driven behavior.
 
 `dr-charm` keeps the most recent 16 KiB of Game and Familiar text for the agent.
 After agent history grows past 32 KiB, `dr-charm` asks the model to condense it

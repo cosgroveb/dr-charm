@@ -43,10 +43,16 @@ transcript or send one game command.
 Whispers and replies use bold text with reverse-video `[whisper]` and `[agent]`
 labels. Commands start with `[agent] >`.
 
+The agent can wait for a relevant game event or pause until you whisper again.
+The status bar shows `AGENT waiting` for game-event waiting and `AGENT paused`
+when only a player whisper can resume it. Prompts do not wake a paused agent.
+F6 off and back on returns auto mode to its normal prompt-driven behavior.
+
 ## Turn auto mode off
 
 Press F6 again. `dr-charm` cancels any request in progress and restores normal
 command entry.
 
 If the status bar shows `AGENT error`, check the endpoint URL, API key, and
-model name. The next game prompt or whisper starts another request.
+model name. The next eligible wake starts another request. A player-paused
+agent wakes only for a whisper.

@@ -140,6 +140,90 @@ func TestAgentToggleWhisperPromptAndPresentation(t *testing.T) {
 	}
 }
 
+func TestAgentPlayerWaitSuppressesPromptAcknowledgements(t *testing.T) {
+	var requests int
+	model := newAgentTestModel(t, agentFunc(func(context.Context, agent.Request) (agent.Result, error) {
+		requests++
+		return agent.Result{Text: "I will wait for you.", History: "wait", WaitUntil: agent.WaitForPlayer}, nil
+	}))
+	model.agent.enabled = true
+	model.handleAgentResult(model.wakeAgent(false)().(agentResultMsg))
+	if model.agent.status != "paused" || strings.Count(strings.Join(model.pendingTranscript, "\n"), "I will wait for you.") != 1 || len(model.session.(*fakeSession).sent) != 0 {
+		t.Fatalf("status=%q transcript=%q sent=%q", model.agent.status, model.pendingTranscript, model.session.(*fakeSession).sent)
+	}
+	for range 3 {
+		updated, command := model.Update(presentation.Update{Connection: presentation.Ready, Prompted: true, Entries: []presentation.Entry{{Pane: presentation.Game, Text: "ambient"}}})
+		model = updated.(EnhancedModel)
+		if command == nil {
+			t.Fatal("session read was not rearmed")
+		}
+	}
+	if requests != 1 || strings.Count(strings.Join(model.pendingTranscript, "\n"), "I will wait for you.") != 1 || len(model.session.(*fakeSession).sent) != 0 || model.agent.status != "paused" {
+		t.Fatalf("requests=%d transcript=%q sent=%q status=%q", requests, model.pendingTranscript, model.session.(*fakeSession).sent, model.agent.status)
+	}
+}
+
+func TestAgentWaitPhasesAndWhisperResume(t *testing.T) {
+	var requests []agent.Request
+	results := []agent.Result{
+		{Text: "Watching.", History: "game", WaitUntil: agent.WaitForGameEvent},
+		{Text: "Paused.", History: "player", WaitUntil: agent.WaitForPlayer},
+		{Command: "look", History: "resumed"},
+	}
+	model := newAgentTestModel(t, agentFunc(func(_ context.Context, request agent.Request) (agent.Result, error) {
+		requests = append(requests, request)
+		result := results[0]
+		results = results[1:]
+		return result, nil
+	}))
+	model.agent.enabled = true
+	model.handleAgentResult(model.wakeAgent(true)().(agentResultMsg))
+	if model.agent.phase != agentWaitingForGameEvent || model.agent.status != "waiting" {
+		t.Fatalf("game wait agent=%+v", model.agent)
+	}
+	model.handleAgentResult(model.wakeAgent(true)().(agentResultMsg))
+	if model.agent.phase != agentWaitingForPlayer || model.agent.status != "paused" {
+		t.Fatalf("player wait agent=%+v", model.agent)
+	}
+	if command := model.wakeAgent(true); command != nil || len(requests) != 2 {
+		t.Fatalf("paused prompt command=%v requests=%d", command, len(requests))
+	}
+	model.input.SetValue("continue")
+	command := model.whisper()
+	if command == nil || model.input.Value() != "" || len(model.agent.whispers) != 1 || model.agent.whispers[0] != "continue" {
+		t.Fatalf("whisper command=%v input=%q whispers=%q", command, model.input.Value(), model.agent.whispers)
+	}
+	if model.agent.phase != agentWaitingForPlayer || model.wakeAgent(true) != nil {
+		t.Fatalf("prompt superseded paused whisper agent=%+v", model.agent)
+	}
+	model.handleAgentResult(command().(agentResultMsg))
+	if model.agent.phase != agentActive || model.agent.status != "idle" || len(model.session.(*fakeSession).sent) != 1 || len(requests) != 3 || len(requests[2].Whispers) != 1 {
+		t.Fatalf("resumed agent=%+v sent=%q requests=%+v", model.agent, model.session.(*fakeSession).sent, requests)
+	}
+}
+
+func TestAgentToggleAndDisconnectPreserveWaitPolicy(t *testing.T) {
+	model := newAgentTestModel(t, agentFunc(func(context.Context, agent.Request) (agent.Result, error) { return agent.Result{}, nil }))
+	model.agent.enabled = true
+	model.agent.phase = agentWaitingForPlayer
+	model.agent.status = "paused"
+	updated, _ := model.Update(presentation.Update{Connection: presentation.Reconnecting})
+	model = updated.(EnhancedModel)
+	if model.agent.phase != agentWaitingForPlayer || model.agent.status != "paused" {
+		t.Fatalf("disconnect agent=%+v", model.agent)
+	}
+	updated, command := model.Update(presentation.Update{Connection: presentation.Ready, Prompted: true})
+	model = updated.(EnhancedModel)
+	if command == nil || model.wakeAgent(true) != nil || model.agent.status != "paused" {
+		t.Fatalf("reconnect agent=%+v command=%v", model.agent, command)
+	}
+	model.toggleAgent()
+	model.toggleAgent()
+	if model.agent.phase != agentActive || model.agent.status != "idle" {
+		t.Fatalf("toggle did not reset phase agent=%+v", model.agent)
+	}
+}
+
 func TestAgentStepContextEndsAfterSuccessAndError(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -155,7 +239,7 @@ func TestAgentStepContextEndsAfterSuccessAndError(t *testing.T) {
 				return agent.Result{}, test.err
 			}))
 			model.agent.enabled = true
-			message := model.wakeAgent()()
+			message := model.wakeAgent(false)()
 			if captured == nil || !errors.Is(captured.Err(), context.Canceled) {
 				t.Fatalf("completed request context error=%v", captured.Err())
 			}
@@ -197,13 +281,13 @@ func TestAgentCommandUsesAliasPathAndCommitsHistoryAfterSend(t *testing.T) {
 	model.snapshot.Connection = presentation.Ready
 	logger := &fakeLogger{enabled: true}
 	model.logger = logger
-	model.handleAgentResult(model.wakeAgent()().(agentResultMsg))
+	model.handleAgentResult(model.wakeAgent(false)().(agentResultMsg))
 	if len(session.sent) != 1 || session.sent[0] != "north" || model.agent.history != "sent" || !contains(strings.Join(model.pendingTranscript, "\n"), "[agent] > n") || len(logger.writes) != 1 || logger.writes[0] != "> n" {
 		t.Fatalf("sent=%q history=%q queue=%q writes=%q", session.sent, model.agent.history, model.pendingTranscript, logger.writes)
 	}
 	session.err = errors.New("unavailable")
 	model.agent.history = "before"
-	model.handleAgentResult(model.wakeAgent()().(agentResultMsg))
+	model.handleAgentResult(model.wakeAgent(false)().(agentResultMsg))
 	if model.agent.history != "before" || strings.Count(strings.Join(model.pendingTranscript, "\n"), "[agent] > n") != 1 || model.agent.status != "error" {
 		t.Fatalf("failed send agent=%+v queue=%q", model.agent, model.pendingTranscript)
 	}
@@ -223,7 +307,7 @@ func TestAgentReconnectWaitsForCanceledRequestBeforeRestart(t *testing.T) {
 		return agent.Result{Text: "current", History: "current"}, nil
 	}))
 	model.agent.enabled = true
-	first := model.wakeAgent()
+	first := model.wakeAgent(false)
 	results := make(chan tea.Msg, 1)
 	go func() { results <- first() }()
 	<-requests
@@ -266,7 +350,7 @@ func TestAgentSupersessionClonesWhispersAndRestartsAfterCancellation(t *testing.
 	model := newAgentTestModel(t, stepper)
 	model.agent.enabled = true
 	model.agent.whispers = []string{"first"}
-	first := model.wakeAgent()
+	first := model.wakeAgent(false)
 	results := make(chan any, 1)
 	go func() { results <- first() }()
 	request := <-calls
@@ -275,7 +359,7 @@ func TestAgentSupersessionClonesWhispersAndRestartsAfterCancellation(t *testing.
 	if request.Whispers[0] != "first" {
 		t.Fatalf("request aliased state: %#v", request)
 	}
-	if cmd := model.wakeAgent(); cmd != nil {
+	if cmd := model.wakeAgent(false); cmd != nil {
 		t.Fatal("overlapping request")
 	}
 	replacement := model.handleAgentResult((<-results).(agentResultMsg))
@@ -301,7 +385,7 @@ func TestAgentCancellationAndLateResultAreIgnored(t *testing.T) {
 	})
 	model := newAgentTestModel(t, stepper)
 	model.agent.enabled = true
-	command := model.wakeAgent()
+	command := model.wakeAgent(false)
 	result := make(chan any, 1)
 	go func() { result <- command() }()
 	ctx := <-started
@@ -314,6 +398,55 @@ func TestAgentCancellationAndLateResultAreIgnored(t *testing.T) {
 	if len(model.session.(*fakeSession).sent) != 0 || model.agent.history == "late" {
 		t.Fatalf("late result accepted: %#v", model.agent)
 	}
+}
+
+func TestStaleAgentResultDoesNotClearReplacementCancellation(t *testing.T) {
+	started := make(chan int, 2)
+	releaseFirst := make(chan struct{})
+	var calls int32
+	model := newAgentTestModel(t, agentFunc(func(ctx context.Context, _ agent.Request) (agent.Result, error) {
+		call := int(atomic.AddInt32(&calls, 1))
+		started <- call
+		if call == 1 {
+			<-releaseFirst
+			return agent.Result{Text: "stale", History: "stale"}, nil
+		}
+		<-ctx.Done()
+		return agent.Result{}, ctx.Err()
+	}))
+	model.agent.enabled = true
+	first := model.wakeAgent(false)
+	firstResult := make(chan tea.Msg, 1)
+	go func() { firstResult <- first() }()
+	if call := <-started; call != 1 {
+		t.Fatalf("first call=%d", call)
+	}
+	model.toggleAgent()
+	model.toggleAgent()
+	model.input.SetValue("resume")
+	if second := model.whisper(); second != nil {
+		t.Fatal("replacement started before canceled request returned")
+	}
+	close(releaseFirst)
+	firstMessage := (<-firstResult).(agentResultMsg)
+	second := model.handleAgentResult(firstMessage)
+	if second == nil {
+		t.Fatal("canceled request did not restart for whisper")
+	}
+	secondResult := make(chan tea.Msg, 1)
+	go func() { secondResult <- second() }()
+	if call := <-started; call != 2 {
+		t.Fatalf("replacement call=%d", call)
+	}
+	model.handleAgentResult(firstMessage)
+	if model.agent.cancel == nil {
+		t.Fatal("stale result cleared replacement cancellation")
+	}
+	if command := model.wakeAgent(false); command != nil || atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("overlapping wake command=%v calls=%d", command, calls)
+	}
+	model.cancelAgent()
+	<-secondResult
 }
 
 func TestPublicAgentCancellationPaths(t *testing.T) {
@@ -358,7 +491,7 @@ func TestPublicAgentCancellationPaths(t *testing.T) {
 			}))
 			model.agent.enabled = true
 			model.agent.whispers = []string{"pending"}
-			command := model.wakeAgent()
+			command := model.wakeAgent(false)
 			result := make(chan tea.Msg, 1)
 			go func() { result <- command() }()
 			ctx := <-started
@@ -393,7 +526,7 @@ func TestAgentRecentContextAndErrorRemainBoundedAndUnstyled(t *testing.T) {
 	}
 	model.appendSystem("local")
 	model.agent.enabled = true
-	model.handleAgentResult(model.wakeAgent()().(agentResultMsg))
+	model.handleAgentResult(model.wakeAgent(false)().(agentResultMsg))
 	if !contains(request.Recent, "Goblin just arrived.") || !contains(request.Recent, "Familiar speaks.") || contains(request.Recent, "local") || strings.Contains(request.Recent, "\x1b") {
 		t.Fatalf("recent=%q", request.Recent)
 	}
@@ -405,7 +538,7 @@ func TestAgentRecentContextAndErrorRemainBoundedAndUnstyled(t *testing.T) {
 		return agent.Result{}, errors.New(strings.Repeat("x", 300) + "\nsecret\x1b[31m")
 	}))
 	errorModel.agent.enabled = true
-	errorModel.handleAgentResult(errorModel.wakeAgent()().(agentResultMsg))
+	errorModel.handleAgentResult(errorModel.wakeAgent(false)().(agentResultMsg))
 	line := errorModel.pendingTranscript[len(errorModel.pendingTranscript)-1]
 	if errorModel.agent.status != "error" || strings.ContainsAny(line, "\n\x1b") || len([]rune(strings.TrimPrefix(line, "[system 01:02:03] agent failed: "))) != 256 {
 		t.Fatalf("line=%q status=%q", line, errorModel.agent.status)
